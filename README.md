@@ -1,100 +1,109 @@
-# 🤟 Tradutor de Libras — Guia Passo a Passo
+# 🤟 Tradutor de Libras com IA
 
-## Estrutura de arquivos
+Este projeto tem como objetivo reconhecer sinais da Língua Brasileira de Sinais (Libras) a partir de vídeos, utilizando técnicas de visão computacional e aprendizado de máquina.
 
-```
-seu_projeto/
-│
-├── videos/                        
-│   ├── ola/
-│   │   ├── video1.mp4
-│   │   └── video2.mp4
-│   ├── agua/
-│   │   ├── video1.mp4
-│   │   └── video2.mp4
-│   └── ajuda/
-│       └── video1.mp4
-│
-├── etapa2_preprocessamento.py     ← roda primeiro
-├── etapa3_treinamento.py          ← roda depois
-│
-├── landmarks.csv                  ← gerado pela etapa 2
-├── modelo_libras.keras            ← gerado pela etapa 3
-├── label_encoder.pkl              ← gerado pela etapa 3
-├── resultado_treinamento.png      ← gerado pela etapa 3
-└── matriz_confusao.png            ← gerado pela etapa 3
-```
+A proposta é transformar movimentos das mãos em dados numéricos e treinar um modelo capaz de identificar automaticamente qual sinal está sendo realizado.
 
 ---
 
-## 1. Instalar dependências
+## 🧠 Como o projeto funciona
 
-```bash
-pip install mediapipe opencv-python pandas numpy tqdm tensorflow scikit-learn matplotlib
-```
+O sistema é dividido em duas etapas principais:
 
----
+### 🔹 1. Extração de dados (pré-processamento)
 
-## 2. Baixar os vídeos de Libras
+Os vídeos são analisados frame a frame utilizando o MediaPipe, uma biblioteca de visão computacional.
 
-Acesse o site do V-Librasil e baixe vídeos de algumas palavras:
-🔗 https://libras.cin.ufpe.br/
+Para cada frame:
+- A mão é detectada  
+- São extraídos 21 pontos (landmarks) da mão  
+- Cada ponto possui coordenadas (x, y, z)  
 
-Organize as pastas como mostrado acima.
-Pelo menos 10 vídeos por sinal é o recomendado.
+Isso gera:
+- 63 valores por frame  
+- 30 frames por vídeo  
+- Total de 1890 valores por vídeo  
 
----
+Esses dados são organizados em formato tabular e armazenados no arquivo:
 
-## 3. Rodar a Etapa 2 (Pré-processamento)
-
-```bash
-python etapa2_preprocessamento.py
-```
-
-O que acontece:
-- Lê cada vídeo da pasta `videos/`
-- Usa o MediaPipe para detectar a mão em cada frame
-- Extrai 21 pontos (x, y, z) = 63 valores por frame
-- Pega 30 frames por vídeo de forma uniforme
-- Salva tudo em `landmarks.csv`
+landmarks.csv
 
 ---
 
-## 4. Rodar a Etapa 3 (Treinamento)
+### 🔹 2. Treinamento do modelo
 
-```bash
-python etapa3_treinamento.py
-```
+Os dados extraídos são utilizados para treinar uma rede neural do tipo LSTM (Long Short-Term Memory).
 
-O que acontece:
-- Lê o `landmarks.csv`
-- Organiza os dados como sequências temporais (30 frames × 63 landmarks)
-- Treina uma rede LSTM com 2 camadas
-- Para automaticamente quando não melhora mais (EarlyStopping)
-- Mostra acurácia, relatório de precisão/recall
-- Salva gráficos de acurácia e matriz de confusão
-- Salva o modelo treinado em `modelo_libras.keras`
+Esse tipo de rede é ideal para:
+- Processar sequências  
+- Entender movimento ao longo do tempo  
 
----
+O modelo aprende padrões de movimento específicos de cada sinal.
 
-## 5. O que esperar de resultado
+Ao final do treinamento, são gerados:
 
-| Quantidade de vídeos por sinal | Acurácia esperada |
-|-------------------------------|-------------------|
-| 5–10 vídeos                   | ~70–80%           |
-| 20–30 vídeos                  | ~85–92%           |
-| 50+ vídeos                    | ~93–97%           |
+- modelo_libras.keras → modelo treinado  
+- label_encoder.pkl → mapeamento dos sinais  
+- resultado_treinamento.png → gráfico de desempenho  
+- matriz_confusao.png → análise dos erros do modelo  
 
 ---
 
-## Dúvidas frequentes
+## 📂 Organização dos dados
 
-**O MediaPipe não detectou a mão no vídeo?**
-→ O script preenche com zeros automaticamente. Isso pode baixar a acurácia.
-→ Solução: usar vídeos bem iluminados e com a mão visível.
+Os vídeos devem ser organizados em pastas, onde cada pasta representa um sinal:
 
-**Erro "landmarks.csv not found" na etapa 3?**
-→ Rode a etapa 2 primeiro.
+videos/
+├── ola/
+├── agua/
+├── ajuda/
 
-**A acurácia ficou muito baixa?**
-→ Tente adicionar mais vídeos por sinal ou reduzir o número de sinais (comece com 3-5).
+Cada pasta contém vídeos diferentes do mesmo sinal.
+
+Isso permite que o modelo aprenda variações do movimento.
+
+---
+
+## 🎯 Objetivo do modelo
+
+O modelo é treinado para:
+
+- Identificar padrões de movimento das mãos  
+- Diferenciar sinais semelhantes  
+- Generalizar para novos vídeos  
+
+---
+
+## 📊 Desempenho esperado
+
+A qualidade do modelo depende diretamente da quantidade e qualidade dos dados:
+
+| Vídeos por sinal | Desempenho esperado |
+|-----------------|--------------------|
+| 5–10            | médio              |
+| 20–30           | bom                |
+| 50+             | alto               |
+
+---
+
+## ⚠️ Limitações
+
+- Sensível à iluminação e qualidade do vídeo  
+- Pode confundir sinais parecidos  
+- Depende da consistência dos dados de entrada  
+
+---
+
+## 🚀 Possíveis melhorias
+
+- Adicionar mais sinais  
+- Utilizar mãos + rosto + corpo (Holistic)  
+- Melhorar o dataset  
+- Implementar reconhecimento em tempo real  
+- Otimizar o modelo para maior precisão  
+
+---
+
+## 📌 Resumo
+
+O projeto transforma vídeos em dados numéricos e utiliza uma rede neural para aprender padrões de movimento, permitindo o reconhecimento automático de sinais em Libras.
