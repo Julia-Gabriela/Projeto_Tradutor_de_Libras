@@ -1,0 +1,83 @@
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*.so
+
+# =========================
+# VENV
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# SISTEMA / IDE
+# =========================
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# =========================
+# DADOS E DATASETS
+# =========================
+videos/
+*.mp4
+*.avi
+*.mov
+
+# CSV gerado
+landmarks.csv
+
+# =========================
+# MODELOS DE IA
+# =========================
+*.keras
+*.h5
+*.pb
+*.tflite
+
+# encoder
+label_encoder.pkl
+
+# =========================
+# RESULTADOS / OUTPUT
+# =========================
+*.png
+*.jpg
+*.jpeg
+
+resultado_treinamento.png
+matriz_confusao.png
+
+# =========================
+# LOGS
+# =========================
+*.log
+
+# =========================
+# CACHE / TEMP
+# =========================
+*.tmp
+*.cache
+
+# =========================
+# DOWNLOADS AUTOMÁTICOS
+# =========================
+hand_landmarker.task
+
+# =========================
+# JUPYTER
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# ENV VARIABLES
+# =========================
+.env
