@@ -1,3 +1,8 @@
+Para rodar aprimeira vez e necessario estar no python 3.11
+
+Para baixar por terminal: winget install Python.Python.3.11
+
+Depois roda : Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 1. Apagar o ambiente virtual antigo
 
 No PowerShell:
