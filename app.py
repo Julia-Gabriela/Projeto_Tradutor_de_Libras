@@ -37,7 +37,7 @@ ultimo_features = None
 
 REPETICOES_ESTAVEIS = 3
 CONFIANCA_MINIMA = 0.55
-MOVIMENTO_MINIMO = 0.002
+MOVIMENTO_MINIMO = 0.001
 
 # =========================
 # CARREGAR MODELO
@@ -807,15 +807,23 @@ def calcular_movimento_maos(features_atual, features_anterior):
     if features_anterior is None:
         return 999.0
 
+    # POSE fica de 0 até 132
+    # Vamos pegar principalmente braços:
+    # ombros, cotovelos e punhos ficam dentro da pose
+    pose_atual = features_atual[0:132]
+    pose_anterior = features_anterior[0:132]
+
+    # Mãos ficam de 132 até 258
     maos_atual = features_atual[132:258]
     maos_anterior = features_anterior[132:258]
 
-    if np.sum(np.abs(maos_atual)) == 0:
-        return 0.0
+    movimento_pose = float(np.mean(np.abs(pose_atual - pose_anterior)))
+    movimento_maos = float(np.mean(np.abs(maos_atual - maos_anterior)))
 
-    return float(np.mean(np.abs(maos_atual - maos_anterior)))
+    # Dá mais peso para mãos, mas agora considera braço também
+    movimento_total = (movimento_maos * 0.7) + (movimento_pose * 0.3)
 
-
+    return movimento_total
 # =========================
 # ROTAS
 # =========================
