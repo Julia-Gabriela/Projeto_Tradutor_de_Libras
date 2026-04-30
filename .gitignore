@@ -27,10 +27,7 @@ Thumbs.db
 # =========================
 # DADOS E DATASETS
 # =========================
-videos/
-*.mp4
-*.avi
-*.mov
+
 
 # CSV gerado
 landmarks.csv

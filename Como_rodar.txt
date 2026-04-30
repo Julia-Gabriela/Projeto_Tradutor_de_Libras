@@ -1,0 +1,98 @@
+Tradutor de Libras com IA 🤟
+
+Projeto de reconhecimento de sinais em Libras usando câmera, MediaPipe e rede neural (LSTM).
+
+Tecnologias usadas
+Python 3.11
+MediaPipe (Holistic)
+OpenCV
+TensorFlow / Keras
+Flask
+DADOS USADOS: https://www.kaggle.com/datasets/davimedio01/v-librasil
+
+Como rodar o projeto
+1. Entrar na pasta do projeto
+
+Abra o terminal na pasta onde estão os arquivos:
+
+app.py
+etapa2_preprocessamento.py
+etapa3_treinamento.py
+requirements.txt
+
+2. Criar ambiente virtual
+py -3.11 -m venv .venv
+.venv\Scripts\activate
+3. Instalar dependências
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+4. Adicionar os vídeos
+
+Coloque os vídeos em:
+
+videos/data/
+
+Formato dos nomes:
+
+Oi_Articulador1.mp4
+Agua_Articulador1.mp4
+Ajudar_Articulador1.mp4
+Obrigado_Articulador1.mp4
+Casa_Articulador1.mp4
+Nada_Articulador1.mp4
+
+Recomendado:
+20 a 40 vídeos por sinal
+
+5. Gerar os dados
+python etapa2_preprocessamento.py
+
+Isso cria:
+
+landmarks.csv
+6. Treinar o modelo
+python etapa3_treinamento.py
+
+Isso cria:
+
+modelo_libras.keras
+label_encoder.pkl
+7. Rodar o sistema
+python app.py
+
+Abrir no navegador:
+
+http://localhost:5000
+Como usar
+Clique em Iniciar Câmera
+Mostre as mãos
+Faça um sinal
+Aguarde alguns segundos
+O sistema mostra o sinal detectado
+Use Adicionar para montar frases
+Se der erro
+
+Verifique se está usando Python 3.11:
+
+python --version
+
+Teste o MediaPipe:
+
+python -c "import mediapipe as mp; print(mp.__version__); print(hasattr(mp, 'solutions'))"
+
+Resultado esperado:
+
+0.10.9
+True
+Se o modelo errar muito
+Grave mais vídeos
+Use boa iluminação
+Fique na mesma posição da câmera
+Adicione a classe Nada
+Re-treine o modelo
+
+Rodar novamente:
+
+python etapa2_preprocessamento.py
+python etapa3_treinamento.py
+python app.py
