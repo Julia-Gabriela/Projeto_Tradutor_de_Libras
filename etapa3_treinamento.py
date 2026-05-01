@@ -1,6 +1,6 @@
 """
 =============================================================
-ETAPA 3 — TREINAMENTO DO MODELO COM HOLISTIC + LSTM
+ETAPA 3 — TREINAMENTO DO MODELO COM HANDS + LSTM
 Compatível com landmarks.csv gerado pela etapa2_preprocessamento.py.
 =============================================================
 
@@ -10,11 +10,16 @@ RODAR:
 
 import os
 import pickle
+import re
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
@@ -28,7 +33,7 @@ from tensorflow.keras.utils import to_categorical
 # CONFIGURAÇÕES
 # =========================
 ARQUIVO_CSV = "landmarks.csv"
-MAX_FRAMES = 30
+MAX_FRAMES = 20
 N_FEATURES = 288
 
 EPOCHS = 150
@@ -39,6 +44,8 @@ MODELO_SAIDA = "modelo_libras.keras"
 ENCODER_SAIDA = "label_encoder.pkl"
 
 N_AUGMENTACOES = 12
+
+METADATA_COLS = ["source_video"]
 
 
 def augmentar_sequencia(seq):
@@ -63,12 +70,49 @@ def augmentar_sequencia(seq):
         deslocamento = np.random.normal(0, 0.003, seq.shape)
         seq += deslocamento
 
+    # Pequeno deslocamento temporal para não decorar o início exato do vídeo.
+    if np.random.rand() > 0.5:
+        desloc_frames = np.random.randint(-2, 3)
+        if desloc_frames != 0:
+            seq = np.roll(seq, desloc_frames, axis=0)
+
+    # Espelhamento ajuda quando a webcam ou o usuário aparece invertido.
+    if np.random.rand() > 0.5:
+        seq = espelhar_sequencia(seq)
+
     return seq.astype(np.float32)
 
 
+def espelhar_sequencia(seq):
+    seq = seq.copy()
+
+    pose = seq[:, :132].reshape(seq.shape[0], 33, 4)
+    left_hand = seq[:, 132:195].copy()
+    right_hand = seq[:, 195:258].copy()
+    face = seq[:, 258:288].reshape(seq.shape[0], len(range(10)), 3)
+
+    pose[:, :, 0] *= -1
+    left_hand[:, 0::3] *= -1
+    right_hand[:, 0::3] *= -1
+    face[:, :, 0] *= -1
+
+    pares_pose = [
+        (1, 4), (2, 5), (3, 6), (7, 8),
+        (11, 12), (13, 14), (15, 16),
+        (23, 24), (25, 26), (27, 28), (29, 30), (31, 32),
+    ]
+    for a, b in pares_pose:
+        pose[:, [a, b], :] = pose[:, [b, a], :]
+
+    seq[:, 132:195] = right_hand
+    seq[:, 195:258] = left_hand
+
+    return seq
+
+
 def aplicar_augmentation(X, y, n_aug=N_AUGMENTACOES):
-    X_aug_list = [X]
-    y_aug_list = [y]
+    X_aug_list = [X, np.array([espelhar_sequencia(seq) for seq in X], dtype=np.float32)]
+    y_aug_list = [y, y]
 
     for _ in range(n_aug):
         X_novo = np.array([augmentar_sequencia(seq) for seq in X], dtype=np.float32)
@@ -82,8 +126,23 @@ def aplicar_augmentation(X, y, n_aug=N_AUGMENTACOES):
     return X_final[idx], y_final[idx]
 
 
+def grupo_video(nome_video):
+    """
+    Mantem copias do mesmo arquivo original no mesmo lado do split.
+    Ex.: "Casa_Articulador4 - Copia (2).mp4" -> "Casa_Articulador4".
+    """
+    nome = os.path.splitext(str(nome_video))[0]
+    anterior = None
+
+    while anterior != nome:
+        anterior = nome
+        nome = re.sub(r"\s+-\s+Copia(?:\s+\(\d+\))?$", "", nome, flags=re.IGNORECASE)
+
+    return nome.strip().lower()
+
+
 print("=" * 60)
-print("  ETAPA 3 — TREINAMENTO HOLISTIC + LSTM")
+print("  ETAPA 3 — TREINAMENTO HANDS + LSTM")
 print("=" * 60)
 
 if not os.path.exists(ARQUIVO_CSV):
@@ -98,7 +157,8 @@ print(f"  Shape original : {df.shape}")
 print(f"  Sinais         : {df['label'].unique().tolist()}")
 print(f"  Amostras/sinal :\n{df['label'].value_counts().to_string()}")
 
-features = df.drop("label", axis=1).values.astype(np.float32)
+metadata_existente = [c for c in METADATA_COLS if c in df.columns]
+features = df.drop(["label"] + metadata_existente, axis=1).values.astype(np.float32)
 labels = df["label"].values
 
 expected_cols = MAX_FRAMES * N_FEATURES
@@ -124,13 +184,46 @@ if contagem.min() < 2:
     print("Adicione mais vídeos por sinal antes de treinar.")
     raise SystemExit
 
-X_train_raw, X_test, y_train_raw, y_test_int = train_test_split(
-    X,
-    y_int,
-    test_size=TEST_SIZE,
-    random_state=42,
-    stratify=y_int
-)
+if "source_video" in df.columns:
+    grupos = df["source_video"].map(grupo_video).values
+
+    splitter = GroupShuffleSplit(
+        n_splits=20,
+        test_size=TEST_SIZE,
+        random_state=42
+    )
+
+    split_escolhido = None
+    for train_idx, test_idx in splitter.split(X, y_int, groups=grupos):
+        if set(y_int[train_idx]) == set(range(n_classes)) and set(y_int[test_idx]) == set(range(n_classes)):
+            split_escolhido = (train_idx, test_idx)
+            break
+
+    if split_escolhido is None:
+        print("\n[AVISO] Não foi possível separar por grupos mantendo todas as classes no teste.")
+        print("Usando split estratificado simples. Cópias podem inflar a acurácia.")
+        X_train_raw, X_test, y_train_raw, y_test_int = train_test_split(
+            X,
+            y_int,
+            test_size=TEST_SIZE,
+            random_state=42,
+            stratify=y_int
+        )
+    else:
+        train_idx, test_idx = split_escolhido
+        X_train_raw, X_test = X[train_idx], X[test_idx]
+        y_train_raw, y_test_int = y_int[train_idx], y_int[test_idx]
+        print("\n  Split por grupo ativo: cópias do mesmo vídeo ficam juntas.")
+else:
+    print("\n[AVISO] landmarks.csv não possui source_video.")
+    print("Rode novamente python etapa2_preprocessamento.py para evitar teste com cópias vazadas.")
+    X_train_raw, X_test, y_train_raw, y_test_int = train_test_split(
+        X,
+        y_int,
+        test_size=TEST_SIZE,
+        random_state=42,
+        stratify=y_int
+    )
 
 print(f"\n  Treino original : {X_train_raw.shape[0]} amostras")
 print(f"  Teste           : {X_test.shape[0]} amostras")
@@ -207,6 +300,13 @@ print(f"\n  Acurácia Final no Teste: {acuracia:.2%}")
 print("\n  Relatório Completo:")
 print(classification_report(y_true, y_pred, target_names=le.classes_, zero_division=0))
 
+model.save(MODELO_SAIDA)
+with open(ENCODER_SAIDA, "wb") as f:
+    pickle.dump(le, f)
+
+print(f"\n  Modelo salvo  : {MODELO_SAIDA}")
+print(f"  Encoder salvo : {ENCODER_SAIDA}")
+
 # Gráficos
 plt.figure(figsize=(8, 5))
 plt.plot(historico.history["accuracy"], label="Treino")
@@ -218,7 +318,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig("resultado_treinamento.png", dpi=150, bbox_inches="tight")
-plt.show()
+plt.close()
 
 plt.figure(figsize=(8, 5))
 plt.plot(historico.history["loss"], label="Treino")
@@ -230,7 +330,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.savefig("resultado_loss.png", dpi=150, bbox_inches="tight")
-plt.show()
+plt.close()
 
 cm = confusion_matrix(y_true, y_pred)
 
@@ -258,13 +358,8 @@ plt.ylabel("Real")
 plt.xlabel("Previsto")
 plt.tight_layout()
 plt.savefig("matriz_confusao.png", dpi=150, bbox_inches="tight")
-plt.show()
+plt.close()
 
-with open(ENCODER_SAIDA, "wb") as f:
-    pickle.dump(le, f)
-
-print(f"\n  Modelo salvo  : {MODELO_SAIDA}")
-print(f"  Encoder salvo : {ENCODER_SAIDA}")
 print("  Gráficos salvos: resultado_treinamento.png | resultado_loss.png | matriz_confusao.png")
 print("\n  Próximo passo:")
 print("  python app.py")

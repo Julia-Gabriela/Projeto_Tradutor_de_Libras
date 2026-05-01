@@ -1,7 +1,7 @@
 """
 =============================================================
 APP — Tradutor de Libras com IA
-MediaPipe Holistic + Flask + LSTM
+MediaPipe Hands + Flask + LSTM
 =============================================================
 
 RODAR:
@@ -26,8 +26,9 @@ app = Flask(__name__)
 # =========================
 # CONFIGURAÇÕES
 # =========================
-MAX_FRAMES = 30
+MAX_FRAMES = 20
 N_FEATURES = 288
+LARGURA_PROCESSAMENTO = 480
 
 FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
 
@@ -36,8 +37,9 @@ ultimas_predicoes = []
 ultimo_features = None
 
 REPETICOES_ESTAVEIS = 3
-CONFIANCA_MINIMA = 0.55
-MOVIMENTO_MINIMO = 0.001
+CONFIANCA_MINIMA = 0.75
+MARGEM_MINIMA = 0.12
+MOVIMENTO_MINIMO = 0.0004
 
 # =========================
 # CARREGAR MODELO
@@ -53,21 +55,45 @@ labels = le.classes_.tolist()
 print(f"Modelo carregado! Sinais: {labels}")
 
 # =========================
-# MEDIAPIPE HOLISTIC
+# MEDIAPIPE HANDS
 # =========================
-mp_holistic = mp.solutions.holistic
+mp_hands = mp.solutions.hands
+mp_pose = mp.solutions.pose
+mp_face_mesh = mp.solutions.face_mesh
 
-holistic = mp_holistic.Holistic(
-    static_image_mode=True,
-    model_complexity=1,
-    smooth_landmarks=True,
-    enable_segmentation=False,
-    refine_face_landmarks=True,
-    min_detection_confidence=0.3,
-    min_tracking_confidence=0.3
+hands_detector = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    model_complexity=0,
+    min_detection_confidence=0.45,
+    min_tracking_confidence=0.45
 )
 
-holistic_lock = threading.Lock()
+pose_detector = mp_pose.Pose(
+    static_image_mode=False,
+    model_complexity=0,
+    smooth_landmarks=True,
+    enable_segmentation=False,
+    min_detection_confidence=0.45,
+    min_tracking_confidence=0.45
+)
+
+face_detector = mp_face_mesh.FaceMesh(
+    static_image_mode=False,
+    max_num_faces=1,
+    refine_landmarks=False,
+    min_detection_confidence=0.45,
+    min_tracking_confidence=0.45
+)
+
+hands_lock = threading.Lock()
+pose_face_lock = threading.Lock()
+visual_frame_count = 0
+ultimo_visual_pose = []
+ultimo_visual_face = []
+PROCESSAR_POSE_ROSTO_A_CADA = 2
+ultimo_pose_features = [0.0] * (33 * 4)
+ultimo_face_features = [0.0] * (len(FACE_INDICES) * 3)
 
 # =========================
 # HTML
@@ -395,7 +421,7 @@ h1 span {
 <header>
   <div class="logo">🤟</div>
   <h1>Tradutor de <span>Libras</span></h1>
-  <div class="badge">Holistic + LSTM</div>
+  <div class="badge">Hands + LSTM</div>
 </header>
 
 <div class="grid">
@@ -484,8 +510,8 @@ btnCam.addEventListener('click', async () => {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 640 },
+          height: { ideal: 480 },
           facingMode: 'user'
         }
       });
@@ -502,34 +528,21 @@ btnCam.addEventListener('click', async () => {
       camStatus.classList.add('active');
       camTxt.textContent = 'Câmera ativa';
 
-      interval = setInterval(enviarFrame, 200);
+      interval = setInterval(enviarFrame, 70);
 
     } catch (e) {
-      alert('Erro ao acessar a câmera: ' + e.message);
+      resetCameraUi();
+
+      const msg = e.name === 'NotReadableError'
+        ? 'A câmera está em uso por outro app/aba. Feche Zoom, Teams, câmera do Windows ou outra aba usando a webcam e tente novamente.'
+        : 'Erro ao acessar a câmera: ' + e.message;
+
+      alert(msg);
       console.error(e);
     }
 
   } else {
-    clearInterval(interval);
-
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-    }
-
-    video.srcObject = null;
-    cameraOn = false;
-    processandoFrame = false;
-
-    ctx.clearRect(0, 0, overlay.width, overlay.height);
-
-    btnCam.textContent = '▶ Iniciar Câmera';
-    camStatus.classList.remove('active');
-    camTxt.textContent = 'Câmera desligada';
-
-    elRes.textContent = '—';
-    elRes.style.color = 'var(--border)';
-    elConf.textContent = 'Aguardando sinal...';
-    elBar.style.width = '0%';
+    resetCameraUi();
   }
 });
 
@@ -544,7 +557,7 @@ async function enviarFrame() {
 
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  const base64 = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+  const base64 = canvas.toDataURL('image/jpeg', 0.55).split(',')[1];
 
   try {
     const resp = await fetch('/predict', {
@@ -588,6 +601,31 @@ async function enviarFrame() {
   } finally {
     processandoFrame = false;
   }
+}
+
+function resetCameraUi() {
+  clearInterval(interval);
+  interval = null;
+
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+  }
+
+  stream = null;
+  video.srcObject = null;
+  cameraOn = false;
+  processandoFrame = false;
+
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  btnCam.textContent = '▶ Iniciar Câmera';
+  camStatus.classList.remove('active');
+  camTxt.textContent = 'Câmera desligada';
+
+  elRes.textContent = '—';
+  elRes.style.color = 'var(--border)';
+  elConf.textContent = 'Aguardando sinal...';
+  elBar.style.width = '0%';
 }
 
 function desenharTudo(visual) {
@@ -718,12 +756,20 @@ speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
 # FUNÇÕES DE LANDMARKS
 # =========================
 def extrair_features_e_visual(frame):
+    global visual_frame_count, ultimo_visual_pose, ultimo_visual_face
+    global ultimo_pose_features, ultimo_face_features
+
+    if LARGURA_PROCESSAMENTO and frame.shape[1] > LARGURA_PROCESSAMENTO:
+        escala = LARGURA_PROCESSAMENTO / frame.shape[1]
+        nova_altura = int(frame.shape[0] * escala)
+        frame = cv2.resize(frame, (LARGURA_PROCESSAMENTO, nova_altura), interpolation=cv2.INTER_AREA)
+
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     rgb.flags.writeable = False
 
     try:
-        with holistic_lock:
-            result = holistic.process(rgb)
+        with hands_lock:
+            result = hands_detector.process(rgb)
     except Exception as e:
         print("[ERRO MEDIAPIPE]", e)
 
@@ -732,75 +778,138 @@ def extrair_features_e_visual(frame):
 
         return np.zeros(N_FEATURES, dtype=np.float32), visual, debug
 
-    pose = []
+    pose = ultimo_pose_features.copy()
+    left_hand = [0.0] * (21 * 3)
+    right_hand = [0.0] * (21 * 3)
+    face = ultimo_face_features.copy()
+    visual = {"hands": [], "face": ultimo_visual_face, "pose": ultimo_visual_pose}
 
-    if result.pose_landmarks:
-        for lm in result.pose_landmarks.landmark[:33]:
-            pose.extend([lm.x, lm.y, lm.z, lm.visibility])
-    else:
-        pose = [0.0] * (33 * 4)
+    maos_detectadas = []
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks[:2]:
+            coords = []
+            pontos_2d = []
+            for lm in hand_landmarks.landmark:
+                coords.extend([lm.x, lm.y, lm.z])
+                pontos_2d.append([lm.x, lm.y])
 
-    left_hand = []
+            centro_x = float(np.mean([p[0] for p in pontos_2d]))
+            maos_detectadas.append((centro_x, coords, pontos_2d))
 
-    if result.left_hand_landmarks:
-        for lm in result.left_hand_landmarks.landmark:
-            left_hand.extend([lm.x, lm.y, lm.z])
-    else:
-        left_hand = [0.0] * (21 * 3)
+        maos_detectadas.sort(key=lambda item: item[0])
 
-    right_hand = []
+        if len(maos_detectadas) >= 1:
+            left_hand = maos_detectadas[0][1]
+        if len(maos_detectadas) >= 2:
+            right_hand = maos_detectadas[1][1]
 
-    if result.right_hand_landmarks:
-        for lm in result.right_hand_landmarks.landmark:
-            right_hand.extend([lm.x, lm.y, lm.z])
-    else:
-        right_hand = [0.0] * (21 * 3)
+        visual["hands"] = [mao[2] for mao in maos_detectadas]
 
-    face = []
+    visual_frame_count += 1
+    if visual_frame_count % PROCESSAR_POSE_ROSTO_A_CADA == 0:
+        try:
+            with pose_face_lock:
+                pose_result = pose_detector.process(rgb)
+                face_result = face_detector.process(rgb)
 
-    if result.face_landmarks:
-        for idx in FACE_INDICES:
-            lm = result.face_landmarks.landmark[idx]
-            face.extend([lm.x, lm.y, lm.z])
-    else:
-        face = [0.0] * (len(FACE_INDICES) * 3)
+            if pose_result.pose_landmarks:
+                pose = []
+                for lm in pose_result.pose_landmarks.landmark[:33]:
+                    pose.extend([lm.x, lm.y, lm.z, lm.visibility])
+                ultimo_pose_features = pose.copy()
 
-    features = np.array(pose + left_hand + right_hand + face, dtype=np.float32)
+                pose_indices = [0, 11, 12, 13, 14, 15, 16]
+                ultimo_visual_pose = [
+                    [pose_result.pose_landmarks.landmark[i].x,
+                     pose_result.pose_landmarks.landmark[i].y]
+                    for i in pose_indices
+                ]
+            else:
+                pose = [0.0] * (33 * 4)
+                ultimo_pose_features = pose.copy()
+                ultimo_visual_pose = []
 
-    visual = {"hands": [], "face": [], "pose": []}
+            if face_result.multi_face_landmarks:
+                face_landmarks = face_result.multi_face_landmarks[0]
+                face = []
+                for idx in FACE_INDICES:
+                    lm = face_landmarks.landmark[idx]
+                    face.extend([lm.x, lm.y, lm.z])
+                ultimo_face_features = face.copy()
 
-    if result.left_hand_landmarks:
-        visual["hands"].append([
-            [lm.x, lm.y] for lm in result.left_hand_landmarks.landmark
-        ])
+                ultimo_visual_face = [
+                    [face_landmarks.landmark[i].x,
+                     face_landmarks.landmark[i].y]
+                    for i in FACE_INDICES
+                ]
+            else:
+                face = [0.0] * (len(FACE_INDICES) * 3)
+                ultimo_face_features = face.copy()
+                ultimo_visual_face = []
 
-    if result.right_hand_landmarks:
-        visual["hands"].append([
-            [lm.x, lm.y] for lm in result.right_hand_landmarks.landmark
-        ])
+            visual["pose"] = ultimo_visual_pose
+            visual["face"] = ultimo_visual_face
+        except Exception as e:
+            print("[ERRO VISUAL POSE/ROSTO]", e)
 
-    if result.face_landmarks:
-        visual["face"] = [
-            [result.face_landmarks.landmark[i].x,
-             result.face_landmarks.landmark[i].y]
-            for i in FACE_INDICES
-        ]
-
-    if result.pose_landmarks:
-        pose_indices = [0, 11, 12, 13, 14, 15, 16]
-        visual["pose"] = [
-            [result.pose_landmarks.landmark[i].x,
-             result.pose_landmarks.landmark[i].y]
-            for i in pose_indices
-        ]
+    features = normalizar_features(np.array(pose + left_hand + right_hand + face, dtype=np.float32))
 
     debug = {
         "hands": len(visual["hands"]),
-        "face": bool(result.face_landmarks),
-        "pose": bool(result.pose_landmarks)
+        "face": bool(visual["face"]),
+        "pose": bool(visual["pose"])
     }
 
     return features, visual, debug
+
+
+def normalizar_features(features):
+    features = features.astype(np.float32).copy()
+
+    pose = features[:132].reshape(33, 4)
+    left_hand = features[132:195].reshape(21, 3)
+    right_hand = features[195:258].reshape(21, 3)
+    face = features[258:288].reshape(len(FACE_INDICES), 3)
+
+    pontos = []
+    if np.any(pose[:, :3] != 0):
+        pontos.append(pose[:, :3])
+    if np.any(left_hand != 0):
+        pontos.append(left_hand)
+    if np.any(right_hand != 0):
+        pontos.append(right_hand)
+    if np.any(face != 0):
+        pontos.append(face)
+
+    if not pontos:
+        return features
+
+    ombro_esq = pose[11, :3]
+    ombro_dir = pose[12, :3]
+    if np.any(ombro_esq != 0) and np.any(ombro_dir != 0):
+        centro = (ombro_esq + ombro_dir) / 2.0
+        escala = float(np.linalg.norm(ombro_esq[:2] - ombro_dir[:2]))
+    else:
+        todos = np.vstack(pontos)
+        validos = todos[np.any(todos != 0, axis=1)]
+        centro = np.mean(validos, axis=0)
+        largura = float(np.max(validos[:, 0]) - np.min(validos[:, 0]))
+        altura = float(np.max(validos[:, 1]) - np.min(validos[:, 1]))
+        escala = max(largura, altura)
+
+    escala = max(escala, 1e-3)
+
+    def normalizar_bloco(bloco):
+        mask = np.any(bloco != 0, axis=1)
+        bloco[mask] = (bloco[mask] - centro) / escala
+
+    mask_pose = np.any(pose[:, :3] != 0, axis=1)
+    pose[mask_pose, :3] = (pose[mask_pose, :3] - centro) / escala
+    normalizar_bloco(left_hand)
+    normalizar_bloco(right_hand)
+    normalizar_bloco(face)
+
+    return features
 
 
 def calcular_movimento_maos(features_atual, features_anterior):
@@ -879,18 +988,6 @@ def predict():
     movimento = calcular_movimento_maos(features, ultimo_features)
     ultimo_features = features.copy()
 
-    if movimento < MOVIMENTO_MINIMO:
-        frame_buffer.clear()
-        ultimas_predicoes.clear()
-
-        return jsonify({
-            "label": None,
-            "confidence": 0.0,
-            "visual": visual,
-            "debug": debug,
-            "waiting": "Aguardando movimento do sinal..."
-        })
-
     frame_buffer.append(features)
 
     if len(frame_buffer) > MAX_FRAMES:
@@ -902,7 +999,7 @@ def predict():
             "confidence": 0.0,
             "visual": visual,
             "debug": debug,
-            "waiting": f"Coletando movimento... {len(frame_buffer)}/{MAX_FRAMES}"
+            "waiting": f"Lendo mãos... {len(frame_buffer)}/{MAX_FRAMES}"
         })
 
     X = np.array(frame_buffer, dtype=np.float32).reshape(
@@ -916,19 +1013,24 @@ def predict():
     idx = int(np.argmax(probs))
     conf = float(probs[idx])
     label_previsto = labels[idx]
+    ordem_probs = np.argsort(probs)[::-1]
+    segunda_conf = float(probs[ordem_probs[1]]) if len(ordem_probs) > 1 else 0.0
+    margem = conf - segunda_conf
 
     print(
         "Predição:",
         label_previsto,
         "| Confiança:",
         round(conf, 4),
+        "| Margem:",
+        round(margem, 4),
         "| Movimento:",
         round(movimento, 4),
         "| Debug:",
         debug
     )
 
-    ultimas_predicoes.append((label_previsto, conf))
+    ultimas_predicoes.append((label_previsto, conf, margem))
 
     if len(ultimas_predicoes) > REPETICOES_ESTAVEIS:
         ultimas_predicoes.pop(0)
@@ -938,19 +1040,28 @@ def predict():
     if len(ultimas_predicoes) == REPETICOES_ESTAVEIS:
         labels_recentes = [p[0] for p in ultimas_predicoes]
         confiancas_recentes = [p[1] for p in ultimas_predicoes]
+        margens_recentes = [p[2] for p in ultimas_predicoes]
 
         mesmo_label = labels_recentes.count(labels_recentes[0]) == len(labels_recentes)
         confianca_media = float(np.mean(confiancas_recentes))
+        margem_media = float(np.mean(margens_recentes))
 
-        if mesmo_label and confianca_media >= CONFIANCA_MINIMA:
+        if (
+            mesmo_label
+            and confianca_media >= CONFIANCA_MINIMA
+            and margem_media >= MARGEM_MINIMA
+        ):
             label_final = labels_recentes[0]
 
     return jsonify({
         "label": label_final,
-        "confidence": conf,
+        "confidence": conf if label_final else 0.0,
         "visual": visual,
         "debug": debug,
-        "waiting": "Aguardando estabilidade..."
+        "waiting": (
+            f"Aguardando sinal confiavel... "
+            f"topo {label_previsto}: {conf * 100:.1f}% | margem {margem * 100:.1f}%"
+        )
     })
 
 
