@@ -28,7 +28,7 @@ USAR_APENAS_VIDEOS_BASE = True
 
 # Deixe [] para processar todos os sinais encontrados.
 # Ou coloque os nomes exatamente como no arquivo antes de "_Articulador".
-SINAIS_FILTRO = ["Oi", "Sim", "Não", "Obrigado", "Casa"]
+SINAIS_FILTRO = ["Oi", "Sim", "Obrigado", "Casa"]
 
 # pose: 33 * 4 = 132
 # left hand: 21 * 3 = 63
