@@ -56,7 +56,7 @@ MODELO_SAIDA = "modelo_libras.keras"
 ENCODER_SAIDA = "label_encoder.pkl"
 
 # Augmentation mais conservadora
-N_AUGMENTACOES = 10
+N_AUGMENTACOES = 15
 
 METADATA_COLS = ["source_video"]
 

@@ -42,11 +42,11 @@ FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
 
 # --- Parâmetros de detecção ---
 CONFIANCA_MINIMA_GLOBAL = 0.75   # Limiar padrão (sobrescrito pelos thresholds por classe)
-MARGEM_MINIMA = 0.15             # Diferença mínima entre 1º e 2º lugar
+MARGEM_MINIMA = 0.35           # Diferença mínima entre 1º e 2º lugar
 VOTOS_NECESSARIOS = 4            # De 5 predições, quantas precisam concordar
 JANELA_PREDICOES = 5             # Tamanho da janela de votação
 DEBOUNCE_FRAMES = 15             # Frames para esperar antes de aceitar o mesmo sinal de novo
-MOVIMENTO_MINIMO = 0.0003        # Movimento mínimo para considerar que há sinal
+MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
 
 # Estado global
 frame_buffer = deque(maxlen=MAX_FRAMES)
@@ -724,9 +724,8 @@ def calcular_movimento(features_atual, features_anterior):
     maos_anterior = features_anterior[132:258]
     pose_atual = features_atual[0:132]
     pose_anterior = features_anterior[0:132]
-    return float(np.mean(np.abs(maos_atual - maos_anterior)) * 0.7 +
-                 np.mean(np.abs(pose_atual - pose_anterior)) * 0.3)
-
+    return float(np.mean(np.abs(maos_atual - maos_anterior)) * 0.9 +
+             np.mean(np.abs(pose_atual - pose_anterior)) * 0.1)
 
 def votar_predicao(historico_pred):
     """
@@ -796,12 +795,47 @@ def predict():
     movimento = calcular_movimento(features, ultimo_features)
     ultimo_features = features.copy()
 
+    # ❌ BLOQUEIA ruído e ausência de movimento (VERSÃO CORRIGIDA)
+    if movimento < MOVIMENTO_MINIMO * 2:
+        frame_buffer.clear()
+        historico_predicoes.clear()
+        return jsonify({
+            "label": None,
+            "confidence": 0.0,
+            "visual": visual,
+            "debug": debug,
+            "waiting": "Sem movimento detectado..."
+        })
+    if movimento < MOVIMENTO_MINIMO * 2:
+        return jsonify({
+            "label": None,
+            "confidence": 0.0,
+            "visual": visual,
+            "debug": debug,
+            "waiting": "Movimento insuficiente..."
+        })
+  
     # Se houver muito movimento (troca de sinal), reseta o buffer
-    if movimento > 0.05 and len(frame_buffer) > 5:
+    if movimento > 0.03 and len(frame_buffer) > 5:
         frame_buffer.clear()
         historico_predicoes.clear()
 
     frame_buffer.append(features)
+
+# Verifica se há frames suficientes com mãos válidas
+    frames_validos = sum(
+        1 for f in frame_buffer
+        if np.sum(np.abs(f[132:258])) > 0
+)
+
+    if frames_validos < 10:
+        return jsonify({
+            "label": None,
+            "confidence": 0.0,
+            "visual": visual,
+            "debug": debug,
+            "waiting": "Ajuste as mãos na câmera..."
+        })
 
     # Aguarda buffer cheio
     if len(frame_buffer) < MAX_FRAMES:
@@ -830,15 +864,28 @@ def predict():
     # Votação ponderada
     resultado_voto = votar_predicao(list(historico_predicoes))
     label_final = None
-
+    conf_voto = conf  # fallback seguro
+    
     if resultado_voto:
         label_voto, conf_voto, votos = resultado_voto
         threshold = get_threshold(label_voto)
 
+        # Regras especiais para sinais parecidos
+        margem_ajustada = MARGEM_MINIMA
+
+        # Regras especiais para sinais parecidos
+        margem_ajustada = MARGEM_MINIMA
+        # Regras especiais para sinais parecidos
+        margem_ajustada = MARGEM_MINIMA
+
+        if label_voto in ["Sim", "Não"]:
+            margem_ajustada = 0.45  # mais rigor pra evitar confusão
+
         aceitar = (
             votos >= VOTOS_NECESSARIOS and
             conf_voto >= threshold and
-            margem >= MARGEM_MINIMA and
+            margem >= margem_ajustada and
+            movimento > MOVIMENTO_MINIMO * 3 and
             debounce_counter == 0
         )
 
