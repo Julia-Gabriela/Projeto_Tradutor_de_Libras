@@ -31,6 +31,7 @@ Thumbs.db
 
 # CSV gerado
 landmarks.csv
+data/*.csv
 
 # =========================
 # MODELOS DE IA
@@ -39,9 +40,13 @@ landmarks.csv
 *.h5
 *.pb
 *.tflite
+!models/modelo_libras.keras
 
 # encoder
 label_encoder.pkl
+models/*.pkl
+!models/label_encoder.pkl
+!models/thresholds.pkl
 
 # =========================
 # RESULTADOS / OUTPUT
@@ -52,6 +57,7 @@ label_encoder.pkl
 
 resultado_treinamento.png
 matriz_confusao.png
+reports/*.png
 
 # =========================
 # LOGS

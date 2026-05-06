@@ -1,0 +1,100 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Tradutor de Libras</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🤟</div>
+    <h1>Tradutor de <span>Libras</span></h1>
+    <span class="badge">IA v2</span>
+  </header>
+
+  <div class="grid">
+    <!-- CÂMERA -->
+    <div>
+      <div class="card-title"><span class="dot"></span>Câmera ao Vivo</div>
+      <div class="camera-box">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="cam-status" id="camStatus">
+          <div class="pulse"></div>
+          <span id="statusText">Câmera desligada</span>
+        </div>
+        <!-- Barra de confiança em tempo real -->
+        <div class="conf-bar-wrap" id="confBarWrap">
+          <div class="conf-label">
+            <span id="confLabelSinal">—</span>
+            <span id="confLabelPct">0%</span>
+          </div>
+          <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%;background:var(--muted)"></div></div>
+        </div>
+      </div>
+      <button id="btnCamera" onclick="toggleCamera()">▶ Iniciar Câmera</button>
+    </div>
+
+    <!-- PAINEL DIREITO -->
+    <div class="right">
+      <!-- Resultado atual -->
+      <div class="result-card">
+        <div class="card-title"><span class="dot"></span>Sinal Detectado</div>
+        <div class="sinal-label" id="sinaLabel">—</div>
+        <div class="waiting-text" id="waitingText">Inicie a câmera para começar</div>
+        <div class="btn-row">
+          <button class="btn-mini" onclick="enviarFeedbackAcerto()">Acertou</button>
+          <select class="btn-mini" id="feedbackLabel">
+            {% for l in labels %}
+            <option value="{{ l }}">{{ l }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn-mini" onclick="enviarFeedbackCorrecao()">Corrigir</button>
+        </div>
+        <div class="waiting-text" id="feedbackStatus"></div>
+        <div class="debug-row">
+          <span class="dbg-chip" id="chipMaos">✋ Mãos: 0</span>
+          <span class="dbg-chip" id="chipRosto">😐 Rosto</span>
+          <span class="dbg-chip" id="chipPose">🧍 Pose</span>
+        </div>
+      </div>
+
+      <!-- Frase construída -->
+      <div class="result-card">
+        <div class="card-title"><span class="dot"></span>Frase</div>
+        <div class="frase-wrap">
+          <div class="frase-label">Palavras detectadas</div>
+          <div class="frase-texto" id="fraseTexto">—</div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-mini" onclick="removerUltima()">← Apagar última</button>
+          <button class="btn-mini danger" onclick="limparFrase()">✕ Limpar tudo</button>
+        </div>
+      </div>
+
+      <!-- Histórico -->
+      <div class="historico-card">
+        <div class="card-title"><span class="dot"></span>Histórico</div>
+        <ul class="historico-lista" id="historicoLista">
+          <li class="historico-vazio">Nenhum sinal detectado ainda.</li>
+        </ul>
+        <button class="btn-limpar" onclick="limparHistorico()">Limpar histórico</button>
+      </div>
+
+      <!-- Sinais disponíveis -->
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>Sinais Disponíveis</div>
+        <div class="sinais-grid">
+          {% for l in labels %}
+          <span class="sinal-chip">{{ l }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

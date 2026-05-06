@@ -28,7 +28,8 @@ from tqdm import tqdm
 # CONFIGURAÇÕES
 # =========================
 PASTA_DATA = os.path.join("videos", "data")
-ARQUIVO_SAIDA = "landmarks.csv"
+DATA_DIR = "data"
+ARQUIVO_SAIDA = os.path.join(DATA_DIR, "landmarks.csv")
 MAX_FRAMES = 20
 LARGURA_PROCESSAMENTO = 480
 USAR_APENAS_VIDEOS_BASE = False  # MUDANÇA: False = usa TODOS os vídeos (mais dados!)
@@ -394,6 +395,7 @@ def main():
     print(f"\n  Após balanceamento:")
     print(df['label'].value_counts().to_string())
 
+    os.makedirs(DATA_DIR, exist_ok=True)
     df.to_csv(ARQUIVO_SAIDA, index=False)
 
     print("\n" + "=" * 60)

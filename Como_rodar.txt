@@ -54,14 +54,18 @@ python etapa2_preprocessamento.py
 
 Vai gerar:
 
-landmarks.csv
+data/landmarks.csv
 🧠 8. Treinar o modelo
 python etapa3_treinamento.py
 
 Vai gerar:
 
-modelo_libras.keras
-label_encoder.pkl
+models/modelo_libras.keras
+models/label_encoder.pkl
+models/thresholds.pkl
+reports/resultado_treinamento.png
+reports/resultado_loss.png
+reports/matriz_confusao.png
 🚀 9. Rodar o sistema
 python app.py
 🌐 10. Abrir no navegador

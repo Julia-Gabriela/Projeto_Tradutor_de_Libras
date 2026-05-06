@@ -26,7 +26,7 @@ Isso gera:
 
 Esses dados são organizados em formato tabular e armazenados no arquivo:
 
-landmarks.csv
+data/landmarks.csv
 
 ---
 
@@ -42,10 +42,12 @@ O modelo aprende padrões de movimento específicos de cada sinal.
 
 Ao final do treinamento, são gerados:
 
-- modelo_libras.keras → modelo treinado  
-- label_encoder.pkl → mapeamento dos sinais  
-- resultado_treinamento.png → gráfico de desempenho  
-- matriz_confusao.png → análise dos erros do modelo  
+- models/modelo_libras.keras → modelo treinado  
+- models/label_encoder.pkl → mapeamento dos sinais  
+- models/thresholds.pkl → limites de confiança por classe
+- reports/resultado_treinamento.png → gráfico de desempenho  
+- reports/resultado_loss.png → gráfico de perda do treino
+- reports/matriz_confusao.png → análise dos erros do modelo  
 
 ---
 

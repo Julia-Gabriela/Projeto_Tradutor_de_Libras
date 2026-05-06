@@ -30,10 +30,14 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import tensorflow as tf
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template, request, jsonify
 from collections import deque
 
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    template_folder=os.path.join("front", "templates"),
+    static_folder=os.path.join("front", "static"),
+)
 
 # =========================
 # CONFIGURAÇÕES
@@ -42,6 +46,11 @@ MAX_FRAMES = 20
 N_FEATURES = 288
 LARGURA_PROCESSAMENTO = 416
 FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
+DATA_DIR = "data"
+MODELS_DIR = "models"
+MODEL_PATH = os.path.join(MODELS_DIR, "modelo_libras.keras")
+ENCODER_PATH = os.path.join(MODELS_DIR, "label_encoder.pkl")
+THRESHOLDS_PATH = os.path.join(MODELS_DIR, "thresholds.pkl")
 
 # --- Parâmetros de detecção ---
 CONFIANCA_MINIMA_GLOBAL = 0.75   # Limiar padrão (sobrescrito pelos thresholds por classe)
@@ -52,71 +61,20 @@ DEBOUNCE_FRAMES = 10             # Frames para esperar antes de aceitar o mesmo 
 MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
 FRAMES_SEM_MAOS_TOLERANCIA = 4  # Evita resetar tudo quando o MediaPipe pisca por poucos frames
 MIN_FRAMES_VALIDOS_PREDICAO = 8
-FEEDBACK_CSV = "feedback_landmarks.csv"
+FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
+DEBUG_PREDICOES = False
 
-# Ajustes práticos para a demo: sinais que estão gerando falso positivo
-# precisam ser mais difíceis de aceitar do que sinais que o modelo quase não libera.
-THRESHOLDS_DEMO = {
-    "Sim": 0.90,
-    "Não": 0.68,
-    "Nao": 0.68,
-    "Obrigado": 0.78,
-    "Oi": 0.67,
-    "Casa": 0.90,
-}
-MARGENS_DEMO = {
-    "Sim": 0.58,
-    "Não": 0.48,
-    "Nao": 0.48,
-    "Obrigado": 0.28,
-    "Oi": 0.35,
-    "Casa": 0.35,
-}
-VOTOS_DEMO = {
-    "Sim": 5,
-    "Não": 4,
-    "Nao": 4,
-    "Obrigado": 4,
-    "Oi": 4,
-    "Casa": 4,
-}
+# Overrides manuais opcionais. Mantenha vazio para usar a calibragem do treino.
+THRESHOLDS_MANUAIS = {}
+MARGENS_MANUAIS = {}
+VOTOS_MANUAIS = {}
 LABELS_REJEICAO = {"Desconhecido", "Desconhecida", "Neutro", "Fundo", "Nada", "Outro"}
-
-# Recalibrado depois do treino com Banheiro/Casa/Desconhecido/Livro/Nome/Obrigado/Oi.
-THRESHOLDS_DEMO = {
-    "Banheiro": 0.75,
-    "Casa": 0.92,
-    "Desconhecido": 0.72,
-    "Livro": 0.75,
-    "Nome": 0.79,
-    "Obrigado": 0.55,
-    "Oi": 0.81,
-}
-MARGENS_DEMO = {
-    "Banheiro": 0.35,
-    "Casa": 0.35,
-    "Desconhecido": 0.25,
-    "Livro": 0.35,
-    "Nome": 0.35,
-    "Obrigado": 0.28,
-    "Oi": 0.35,
-}
-VOTOS_DEMO = {
-    "Banheiro": 2,
-    "Casa": 2,
-    "Desconhecido": 2,
-    "Livro": 2,
-    "Nome": 2,
-    "Obrigado": 2,
-    "Oi": 2,
-}
 
 # Estado global
 frame_buffer = deque(maxlen=MAX_FRAMES)
 historico_predicoes = deque(maxlen=JANELA_PREDICOES)
 ultimo_features = None
 debounce_counter = 0
-ultimo_label_aceito = None
 frames_sem_maos = 0
 ultima_seq_feedback = None
 ultimo_label_feedback = None
@@ -138,9 +96,9 @@ ultimo_visual_face = []
 # CARREGAR MODELO
 # =========================
 print("Carregando modelo...")
-model = tf.keras.models.load_model("modelo_libras.keras")
+model = tf.keras.models.load_model(MODEL_PATH)
 
-with open("label_encoder.pkl", "rb") as f:
+with open(ENCODER_PATH, "rb") as f:
     le = pickle.load(f)
 
 labels = le.classes_.tolist()
@@ -148,8 +106,8 @@ print(f"Modelo carregado! Sinais: {labels}")
 
 # Carrega thresholds calibrados (se existir)
 thresholds_por_classe = {}
-if os.path.exists("thresholds.pkl"):
-    with open("thresholds.pkl", "rb") as f:
+if os.path.exists(THRESHOLDS_PATH):
+    with open(THRESHOLDS_PATH, "rb") as f:
         thresholds_por_classe = pickle.load(f)
     print(f"Thresholds calibrados carregados: {thresholds_por_classe}")
 else:
@@ -164,7 +122,15 @@ def eh_label_rejeicao(label):
 
 
 def get_threshold(label):
-    return THRESHOLDS_DEMO.get(chave_label(label), thresholds_por_classe.get(label, CONFIANCA_MINIMA_GLOBAL))
+    return THRESHOLDS_MANUAIS.get(chave_label(label), thresholds_por_classe.get(label, CONFIANCA_MINIMA_GLOBAL))
+
+
+def get_margem_minima(label):
+    return MARGENS_MANUAIS.get(chave_label(label), MARGEM_MINIMA)
+
+
+def get_votos_necessarios(label):
+    return VOTOS_MANUAIS.get(chave_label(label), VOTOS_NECESSARIOS)
 
 # =========================
 # MEDIAPIPE
@@ -186,570 +152,6 @@ face_detector = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.55, min_tracking_confidence=0.55
 )
 
-# =========================
-# HTML
-# =========================
-HTML = """
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8">
-<title>Tradutor de Libras</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap');
-
-:root {
-  --bg:#0a0a0f;
-  --surface:#12121a;
-  --border:#1e1e2e;
-  --accent:#00e5ff;
-  --accent2:#7c3aed;
-  --green:#00ff88;
-  --text:#e8e8f0;
-  --muted:#77779a;
-  --danger:#ff4466;
-  --warn:#f59e0b;
-}
-
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; min-height:100vh; }
-body::before {
-  content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
-  background-image: linear-gradient(rgba(0,229,255,.03) 1px,transparent 1px),
-                    linear-gradient(90deg,rgba(0,229,255,.03) 1px,transparent 1px);
-  background-size:40px 40px;
-}
-.wrap { position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:2rem 1.5rem; }
-
-header { display:flex; align-items:center; gap:1rem; margin-bottom:2rem; }
-.logo {
-  width:44px; height:44px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  border-radius:12px; display:grid; place-items:center; font-size:1.3rem;
-}
-h1 { font-family:'Syne',sans-serif; font-size:1.6rem; font-weight:800; }
-h1 span { color:var(--accent); }
-.badge {
-  margin-left:auto; background:rgba(0,229,255,.1);
-  border:1px solid rgba(0,229,255,.25); color:var(--accent);
-  font-size:.7rem; font-weight:500; padding:.3rem .7rem;
-  border-radius:999px; text-transform:uppercase; letter-spacing:.05em;
-}
-
-.grid { display:grid; grid-template-columns:1fr 380px; gap:1.5rem; }
-.card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:1.25rem; }
-.card-title {
-  font-family:'Syne',sans-serif; font-size:.75rem; font-weight:700;
-  letter-spacing:.12em; text-transform:uppercase; color:var(--muted);
-  margin-bottom:1rem; display:flex; align-items:center; gap:.5rem;
-}
-.dot { width:6px; height:6px; border-radius:50%; background:var(--accent); }
-
-.camera-box { position:relative; aspect-ratio:4/3; background:#070710; border-radius:12px; overflow:hidden; }
-#video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); border-radius:12px; }
-#overlay { position:absolute; inset:0; width:100%; height:100%; transform:scaleX(-1); pointer-events:none; }
-
-.cam-status {
-  position:absolute; top:.75rem; left:.75rem;
-  background:rgba(0,0,0,.7); backdrop-filter:blur(6px);
-  border:1px solid var(--border); border-radius:999px;
-  padding:.3rem .8rem; font-size:.72rem; font-weight:500;
-  display:flex; align-items:center; gap:.4rem;
-}
-.pulse { width:7px; height:7px; border-radius:50%; background:var(--muted); }
-.active .pulse { background:var(--green); animation:blink 1s infinite; }
-@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-/* Barra de confiança em tempo real */
-.conf-bar-wrap {
-  position:absolute; bottom:.75rem; left:.75rem; right:.75rem;
-  background:rgba(0,0,0,.6); backdrop-filter:blur(4px);
-  border:1px solid var(--border); border-radius:8px;
-  padding:.4rem .6rem; display:none;
-}
-.conf-bar-wrap.visible { display:block; }
-.conf-label { font-size:.65rem; color:var(--muted); margin-bottom:.25rem; display:flex; justify-content:space-between; }
-.conf-bar { height:4px; background:rgba(255,255,255,.1); border-radius:2px; overflow:hidden; }
-.conf-fill { height:100%; border-radius:2px; transition:width .2s, background .2s; }
-
-#btnCamera {
-  margin-top:1rem; width:100%; padding:.9rem;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  color:#fff; border:none; border-radius:10px;
-  font-family:'Syne',sans-serif; font-size:.95rem; font-weight:700;
-  cursor:pointer; letter-spacing:.04em;
-}
-
-.right { display:flex; flex-direction:column; gap:1.25rem; }
-
-.result-card {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:16px; padding:1.5rem; text-align:center;
-}
-.sinal-label {
-  font-family:'Syne',sans-serif; font-size:2.8rem; font-weight:800;
-  color:var(--accent); min-height:3.5rem; display:flex;
-  align-items:center; justify-content:center;
-  transition: all .3s ease;
-}
-.sinal-label.flash { animation: flash-in .4s ease; }
-@keyframes flash-in {
-  0%   { transform:scale(1.3); color:#fff; }
-  100% { transform:scale(1);   color:var(--accent); }
-}
-.waiting-text { font-size:.8rem; color:var(--muted); margin-top:.5rem; min-height:1.2rem; }
-
-/* Debug / sensores */
-.debug-row { display:flex; gap:.5rem; margin-top:.75rem; flex-wrap:wrap; justify-content:center; }
-.dbg-chip {
-  font-size:.65rem; padding:.2rem .6rem; border-radius:999px;
-  background:rgba(255,255,255,.05); border:1px solid var(--border);
-  color:var(--muted); transition:.2s;
-}
-.dbg-chip.on { background:rgba(0,255,136,.1); border-color:var(--green); color:var(--green); }
-
-/* Histórico */
-.historico-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:1.25rem; flex:1; }
-.historico-lista { list-style:none; display:flex; flex-direction:column; gap:.5rem; max-height:220px; overflow-y:auto; }
-.historico-lista li {
-  background:rgba(0,229,255,.05); border:1px solid rgba(0,229,255,.1);
-  border-radius:8px; padding:.4rem .75rem;
-  display:flex; justify-content:space-between; align-items:center;
-  animation: slide-in .3s ease;
-}
-@keyframes slide-in { from { opacity:0; transform:translateX(-10px); } to { opacity:1; transform:none; } }
-.hist-sinal { font-family:'Syne',sans-serif; font-weight:700; color:var(--accent); }
-.hist-conf { font-size:.7rem; color:var(--muted); }
-.historico-vazio { font-size:.8rem; color:var(--muted); text-align:center; padding:1rem; }
-
-/* Botão limpar histórico */
-.btn-limpar {
-  margin-top:.75rem; width:100%; padding:.5rem;
-  background:transparent; color:var(--muted);
-  border:1px solid var(--border); border-radius:8px;
-  font-size:.75rem; cursor:pointer; transition:.2s;
-}
-.btn-limpar:hover { border-color:var(--danger); color:var(--danger); }
-
-/* Sinais disponíveis */
-.sinais-grid { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.5rem; }
-.sinal-chip {
-  font-size:.72rem; padding:.3rem .65rem; border-radius:999px;
-  background:rgba(124,58,237,.1); border:1px solid rgba(124,58,237,.25);
-  color:#a78bfa;
-}
-
-/* Frase construída */
-.frase-wrap { margin-top:1rem; padding:.75rem; background:rgba(0,229,255,.04); border-radius:10px; border:1px solid rgba(0,229,255,.12); min-height:50px; }
-.frase-label { font-size:.65rem; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:.3rem; }
-.frase-texto { font-family:'Syne',sans-serif; font-size:1.1rem; font-weight:700; color:var(--text); word-break:break-word; }
-.btn-row { display:flex; gap:.5rem; margin-top:.5rem; }
-.btn-mini {
-  flex:1; padding:.4rem; background:transparent;
-  border:1px solid var(--border); border-radius:8px;
-  font-size:.72rem; cursor:pointer; color:var(--muted); transition:.2s;
-}
-.btn-mini:hover { border-color:var(--accent); color:var(--accent); }
-.btn-mini.danger:hover { border-color:var(--danger); color:var(--danger); }
-
-@media(max-width:740px) {
-  .grid { grid-template-columns:1fr; }
-}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <div class="logo">🤟</div>
-    <h1>Tradutor de <span>Libras</span></h1>
-    <span class="badge">IA v2</span>
-  </header>
-
-  <div class="grid">
-    <!-- CÂMERA -->
-    <div>
-      <div class="card-title"><span class="dot"></span>Câmera ao Vivo</div>
-      <div class="camera-box">
-        <video id="video" autoplay playsinline muted></video>
-        <canvas id="overlay"></canvas>
-        <div class="cam-status" id="camStatus">
-          <div class="pulse"></div>
-          <span id="statusText">Câmera desligada</span>
-        </div>
-        <!-- Barra de confiança em tempo real -->
-        <div class="conf-bar-wrap" id="confBarWrap">
-          <div class="conf-label">
-            <span id="confLabelSinal">—</span>
-            <span id="confLabelPct">0%</span>
-          </div>
-          <div class="conf-bar"><div class="conf-fill" id="confFill" style="width:0%;background:var(--muted)"></div></div>
-        </div>
-      </div>
-      <button id="btnCamera" onclick="toggleCamera()">▶ Iniciar Câmera</button>
-    </div>
-
-    <!-- PAINEL DIREITO -->
-    <div class="right">
-      <!-- Resultado atual -->
-      <div class="result-card">
-        <div class="card-title"><span class="dot"></span>Sinal Detectado</div>
-        <div class="sinal-label" id="sinaLabel">—</div>
-        <div class="waiting-text" id="waitingText">Inicie a câmera para começar</div>
-        <div class="btn-row">
-          <button class="btn-mini" onclick="enviarFeedbackAcerto()">Acertou</button>
-          <select class="btn-mini" id="feedbackLabel">
-            {% for l in labels %}
-            <option value="{{ l }}">{{ l }}</option>
-            {% endfor %}
-          </select>
-          <button class="btn-mini" onclick="enviarFeedbackCorrecao()">Corrigir</button>
-        </div>
-        <div class="waiting-text" id="feedbackStatus"></div>
-        <div class="debug-row">
-          <span class="dbg-chip" id="chipMaos">✋ Mãos: 0</span>
-          <span class="dbg-chip" id="chipRosto">😐 Rosto</span>
-          <span class="dbg-chip" id="chipPose">🧍 Pose</span>
-        </div>
-      </div>
-
-      <!-- Frase construída -->
-      <div class="result-card">
-        <div class="card-title"><span class="dot"></span>Frase</div>
-        <div class="frase-wrap">
-          <div class="frase-label">Palavras detectadas</div>
-          <div class="frase-texto" id="fraseTexto">—</div>
-        </div>
-        <div class="btn-row">
-          <button class="btn-mini" onclick="removerUltima()">← Apagar última</button>
-          <button class="btn-mini danger" onclick="limparFrase()">✕ Limpar tudo</button>
-        </div>
-      </div>
-
-      <!-- Histórico -->
-      <div class="historico-card">
-        <div class="card-title"><span class="dot"></span>Histórico</div>
-        <ul class="historico-lista" id="historicoLista">
-          <li class="historico-vazio">Nenhum sinal detectado ainda.</li>
-        </ul>
-        <button class="btn-limpar" onclick="limparHistorico()">Limpar histórico</button>
-      </div>
-
-      <!-- Sinais disponíveis -->
-      <div class="card">
-        <div class="card-title"><span class="dot"></span>Sinais Disponíveis</div>
-        <div class="sinais-grid">
-          {% for l in labels %}
-          <span class="sinal-chip">{{ l }}</span>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-let cameraAtiva = false;
-let stream = null;
-let intervalo = null;
-const video = document.getElementById('video');
-const overlay = document.getElementById('overlay');
-const ctx = overlay.getContext('2d');
-let historico = [];
-let frase = [];
-let primeiroHistorico = true;
-let vozAutomatica = true;
-let framesSemSinal = 0;
-let enviandoFrame = false;
-let ultimoLabelFeedback = null;
-let ultimaConfFeedback = 0;
-const FRAMES_PARA_LIMPAR_SINAL = 6;
-
-async function toggleCamera() {
-  if (!cameraAtiva) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
-      video.srcObject = stream;
-      await video.play();
-      await resetarBackend();
-      cameraAtiva = true;
-      document.getElementById('btnCamera').textContent = '⏹ Parar Câmera';
-      document.getElementById('camStatus').classList.add('active');
-      document.getElementById('statusText').textContent = 'Ao vivo';
-      intervalo = setInterval(enviarFrame, 80);
-    } catch (e) {
-      alert('Não foi possível acessar a câmera: ' + e.message);
-    }
-  } else {
-    pararCamera();
-  }
-}
-
-function pararCamera() {
-  clearInterval(intervalo);
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  cameraAtiva = false;
-  document.getElementById('btnCamera').textContent = '▶ Iniciar Câmera';
-  document.getElementById('camStatus').classList.remove('active');
-  document.getElementById('statusText').textContent = 'Câmera desligada';
-  document.getElementById('confBarWrap').classList.remove('visible');
-  limparSinalAtual();
-  ultimoLabelFeedback = null;
-  ultimaConfFeedback = 0;
-  document.getElementById('feedbackStatus').textContent = '';
-  resetarBackend();
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
-}
-
-function limparSinalAtual() {
-  const el = document.getElementById('sinaLabel');
-  el.textContent = '-';
-  el.classList.remove('flash');
-  framesSemSinal = 0;
-}
-
-async function resetarBackend() {
-  try {
-    await fetch('/reset', { method: 'POST' });
-  } catch (e) {
-    console.warn('Nao foi possivel resetar o backend:', e);
-  }
-}
-
-function capturarFrame() {
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth || 320;
-  canvas.height = video.videoHeight || 240;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-}
-
-async function enviarFrame() {
-  if (!cameraAtiva || video.readyState < 2 || enviandoFrame) return;
-  enviandoFrame = true;
-  overlay.width = video.clientWidth;
-  overlay.height = video.clientHeight;
-
-  const b64 = capturarFrame();
-  try {
-    const res = await fetch('/predict', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ frame: b64 })
-    });
-    const data = await res.json();
-    processarResposta(data);
-  } catch (e) {
-    console.error('Erro ao enviar frame:', e);
-  } finally {
-    enviandoFrame = false;
-  }
-}
-
-function processarResposta(data) {
-  // Debug chips
-  const maos = data.debug?.hands || 0;
-  const rosto = data.debug?.face || false;
-  const pose = data.debug?.pose || false;
-
-  const chipMaos = document.getElementById('chipMaos');
-  chipMaos.textContent = `✋ Mãos: ${maos}`;
-  chipMaos.className = 'dbg-chip' + (maos > 0 ? ' on' : '');
-
-  const chipRosto = document.getElementById('chipRosto');
-  chipRosto.className = 'dbg-chip' + (rosto ? ' on' : '');
-
-  const chipPose = document.getElementById('chipPose');
-  chipPose.className = 'dbg-chip' + (pose ? ' on' : '');
-
-  // Barra de confiança em tempo real
-  if (data.live_conf !== undefined && data.live_label) {
-    const confBarWrap = document.getElementById('confBarWrap');
-    confBarWrap.classList.add('visible');
-    const pct = Math.round(data.live_conf * 100);
-    document.getElementById('confLabelSinal').textContent = data.live_label;
-    document.getElementById('confLabelPct').textContent = pct + '%';
-    const fill = document.getElementById('confFill');
-    fill.style.width = pct + '%';
-    fill.style.background = pct >= 80 ? 'var(--green)' : pct >= 60 ? 'var(--warn)' : 'var(--muted)';
-  }
-
-  // Waiting text
-  document.getElementById('waitingText').textContent = data.waiting || '';
-
-  // Sinal detectado
-  if (data.label) {
-    const el = document.getElementById('sinaLabel');
-    el.textContent = data.label;
-    el.classList.remove('flash');
-    void el.offsetWidth;
-    el.classList.add('flash');
-
-    adicionarHistorico(data.label, data.confidence);
-    adicionarFrase(data.label);
-    ultimoLabelFeedback = data.label;
-    ultimaConfFeedback = data.confidence || 0;
-    document.getElementById('feedbackStatus').textContent =
-      `Ultimo para feedback: ${data.label} (${Math.round(ultimaConfFeedback * 100)}%)`;
-    framesSemSinal = 0;
-  } else {
-    framesSemSinal += 1;
-    const waiting = data.waiting || '';
-    const deveLimparAgora =
-      maos <= 0 ||
-      waiting.includes('vocabul') ||
-      waiting.includes('Mostre as') ||
-      waiting.includes('Ajuste as');
-
-    if (deveLimparAgora || framesSemSinal >= FRAMES_PARA_LIMPAR_SINAL) {
-      limparSinalAtual();
-    }
-  }
-
-  // Desenha landmarks
-  desenharLandmarks(data.visual || {});
-}
-
-async function enviarFeedback(label) {
-  const status = document.getElementById('feedbackStatus');
-  if (!label || label === '—' || label === '-') {
-    status.textContent = 'Nenhum sinal recente para salvar.';
-    return;
-  }
-
-  status.textContent = 'Salvando exemplo...';
-  try {
-    const res = await fetch('/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ label })
-    });
-    const data = await res.json();
-    status.textContent = data.ok
-      ? `Exemplo salvo como ${data.label}.`
-      : (data.error || 'Nao foi possivel salvar.');
-  } catch (e) {
-    status.textContent = 'Erro ao salvar feedback.';
-  }
-}
-
-function enviarFeedbackAcerto() {
-  const labelAtual = document.getElementById('sinaLabel').textContent.trim();
-  const labelFeedback = labelAtual && labelAtual !== '-' ? labelAtual : ultimoLabelFeedback;
-  enviarFeedback(labelFeedback);
-}
-
-function enviarFeedbackCorrecao() {
-  const labelCorreto = document.getElementById('feedbackLabel').value;
-  enviarFeedback(labelCorreto);
-}
-
-function adicionarHistorico(label, conf) {
-  if (primeiroHistorico) {
-    document.getElementById('historicoLista').innerHTML = '';
-    primeiroHistorico = false;
-  }
-  historico.unshift({ label, conf });
-
-  const lista = document.getElementById('historicoLista');
-  const li = document.createElement('li');
-  li.innerHTML = `
-    <span class="hist-sinal">${label}</span>
-    <span class="hist-conf">${(conf * 100).toFixed(0)}%</span>
-  `;
-  lista.insertBefore(li, lista.firstChild);
-
-  // Limita histórico a 20 itens
-  while (lista.children.length > 20) lista.removeChild(lista.lastChild);
-}
-
-function adicionarFrase(label) {
-  frase.push(label);
-  atualizarFrase();
-  if (vozAutomatica) falarTexto(label);
-}
-
-function atualizarFrase() {
-  const el = document.getElementById('fraseTexto');
-  el.textContent = frase.length > 0 ? frase.join(' ') : '—';
-}
-
-function removerUltima() {
-  frase.pop();
-  atualizarFrase();
-}
-
-function falarTexto(texto) {
-  if (!('speechSynthesis' in window) || !texto) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(texto);
-  utterance.lang = 'pt-BR';
-  utterance.rate = 0.95;
-  utterance.pitch = 1.0;
-  window.speechSynthesis.speak(utterance);
-}
-
-function falarFrase() {
-  falarTexto(frase.join(' '));
-}
-
-function alternarVoz() {
-  vozAutomatica = !vozAutomatica;
-}
-
-function limparFrase() {
-  frase = [];
-  atualizarFrase();
-}
-
-function limparHistorico() {
-  historico = [];
-  document.getElementById('historicoLista').innerHTML =
-    '<li class="historico-vazio">Nenhum sinal detectado ainda.</li>';
-  primeiroHistorico = true;
-}
-
-function desenharLandmarks(visual) {
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
-  const W = overlay.width, H = overlay.height;
-
-  // Mãos
-  if (visual.hands) {
-    visual.hands.forEach((mao, idx) => {
-      ctx.strokeStyle = idx === 0 ? '#00e5ff' : '#7c3aed';
-      ctx.lineWidth = 1.5;
-      mao.forEach(p => {
-        ctx.beginPath();
-        ctx.arc(p[0] * W, p[1] * H, 3, 0, Math.PI * 2);
-        ctx.fillStyle = idx === 0 ? '#00e5ff' : '#7c3aed';
-        ctx.fill();
-      });
-    });
-  }
-
-  // Pose
-  if (visual.pose && visual.pose.length > 0) {
-    ctx.fillStyle = 'rgba(0,255,136,0.6)';
-    visual.pose.forEach(p => {
-      ctx.beginPath();
-      ctx.arc(p[0] * W, p[1] * H, 4, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  }
-
-  // Rosto
-  if (visual.face && visual.face.length > 0) {
-    ctx.fillStyle = 'rgba(245,158,11,0.5)';
-    visual.face.forEach(p => {
-      ctx.beginPath();
-      ctx.arc(p[0] * W, p[1] * H, 2, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  }
-}
-</script>
-</body>
-</html>
-"""
 
 
 # =========================
@@ -975,6 +377,7 @@ def salvar_feedback(label):
     linha.append(f"feedback_{int(time.time() * 1000)}")
     linha.append(label)
 
+    os.makedirs(os.path.dirname(FEEDBACK_CSV), exist_ok=True)
     escrever_cabecalho = not os.path.exists(FEEDBACK_CSV) or os.path.getsize(FEEDBACK_CSV) == 0
     with open(FEEDBACK_CSV, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -990,18 +393,21 @@ def salvar_feedback(label):
 # =========================
 
 def resetar_estado_inferencia():
-    global ultimo_features, debounce_counter, ultimo_label_aceito, frames_sem_maos
+    global ultimo_features, debounce_counter, frames_sem_maos
+    global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
     frame_buffer.clear()
     historico_predicoes.clear()
     ultimo_features = None
     debounce_counter = 0
-    ultimo_label_aceito = None
     frames_sem_maos = 0
+    ultima_seq_feedback = None
+    ultimo_label_feedback = None
+    ultima_conf_feedback = 0.0
 
 
 @app.route("/")
 def index():
-    return render_template_string(HTML, labels=labels)
+    return render_template("index.html", labels=labels)
 
 
 @app.route("/reset", methods=["POST"])
@@ -1035,10 +441,10 @@ def feedback():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    global ultimo_features, debounce_counter, ultimo_label_aceito, frames_sem_maos
+    global ultimo_features, debounce_counter, frames_sem_maos
     global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
 
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     b64 = data.get("frame", "")
 
     try:
@@ -1069,7 +475,6 @@ def predict():
 
     frames_sem_maos = 0
 
-    # Calcula movimento
     movimento = calcular_movimento(features, ultimo_features)
     ultimo_features = features.copy()
 
@@ -1081,11 +486,10 @@ def predict():
     frame_buffer.append(features)
     movimento_seq = calcular_movimento_sequencia(frame_buffer)
 
-# Verifica se há frames suficientes com mãos válidas
     frames_validos = sum(
         1 for f in frame_buffer
         if np.sum(np.abs(f[132:258])) > 0
-)
+    )
 
     if frames_validos < MIN_FRAMES_VALIDOS_PREDICAO:
         return jsonify({
@@ -1117,7 +521,11 @@ def predict():
 
     historico_predicoes.append((probs, conf, margem))
 
-    print(f"Pred: {label_previsto} | Conf: {conf:.3f} | Margem: {margem:.3f} | Mov: {movimento:.4f} | Seq: {movimento_seq:.4f}")
+    if DEBUG_PREDICOES:
+        print(
+            f"Pred: {label_previsto} | Conf: {conf:.3f} | Margem: {margem:.3f} | "
+            f"Mov: {movimento:.4f} | Seq: {movimento_seq:.4f}"
+        )
 
     # Debounce: desconta contador a cada frame
     if debounce_counter > 0:
@@ -1129,37 +537,23 @@ def predict():
     conf_voto = conf  # fallback seguro
     
     if resultado_voto:
-        label_voto, conf_voto, votos, margem_voto, segundo_label, segunda_conf_voto = resultado_voto
+        label_voto, conf_voto, votos, margem_voto, _, _ = resultado_voto
         threshold = get_threshold(label_voto)
 
-        # Regras especiais para sinais parecidos
-        margem_ajustada = MARGEM_MINIMA
-
-        if label_voto in ["Sim", "Não"]:
-            margem_ajustada = 0.45  # mais rigor pra evitar confusão
-
-        label_chave = chave_label(label_voto)
-        margem_ajustada = MARGENS_DEMO.get(label_chave, margem_ajustada)
-        votos_necessarios = VOTOS_DEMO.get(label_chave, VOTOS_NECESSARIOS)
-        conflito_sim_obrigado = (
-            label_voto == "Sim" and
-            segundo_label == "Obrigado" and
-            segunda_conf_voto >= 0.25
-        )
+        margem_ajustada = get_margem_minima(label_voto)
+        votos_necessarios = get_votos_necessarios(label_voto)
 
         aceitar = (
             votos >= votos_necessarios and
             conf_voto >= threshold and
             margem_voto >= margem_ajustada and
             movimento_seq > MOVIMENTO_MINIMO * 2 and
-            debounce_counter == 0 and
-            not conflito_sim_obrigado
+            debounce_counter == 0
         )
 
         if aceitar:
             label_final = None if eh_label_rejeicao(label_voto) else label_voto
             debounce_counter = DEBOUNCE_FRAMES
-            ultimo_label_aceito = label_voto
             # Reseta buffer parcialmente para permitir próximo sinal
             for _ in range(MAX_FRAMES // 2):
                 if frame_buffer:

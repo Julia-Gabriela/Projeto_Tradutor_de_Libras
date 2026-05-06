@@ -43,8 +43,12 @@ from tensorflow.keras import regularizers
 # =========================
 # CONFIGURAÇÕES
 # =========================
-ARQUIVO_CSV = "landmarks.csv"
-FEEDBACK_CSV = "feedback_landmarks.csv"
+DATA_DIR = "data"
+MODELS_DIR = "models"
+REPORTS_DIR = "reports"
+
+ARQUIVO_CSV = os.path.join(DATA_DIR, "landmarks.csv")
+FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
 MAX_FRAMES = 20
 N_FEATURES = 288
 
@@ -52,8 +56,8 @@ EPOCHS = 150
 BATCH_SIZE = 16
 TEST_SIZE = 0.25
 
-MODELO_SAIDA = "modelo_libras.keras"
-ENCODER_SAIDA = "label_encoder.pkl"
+MODELO_SAIDA = os.path.join(MODELS_DIR, "modelo_libras.keras")
+ENCODER_SAIDA = os.path.join(MODELS_DIR, "label_encoder.pkl")
 
 # Augmentation mais conservadora
 N_AUGMENTACOES = 15
@@ -244,6 +248,9 @@ print("=" * 60)
 print("  ETAPA 3 — TREINAMENTO MELHORADO (LSTM + ATENÇÃO)")
 print("=" * 60)
 
+os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
+
 if not os.path.exists(ARQUIVO_CSV):
     print(f"[ERRO] {ARQUIVO_CSV} não encontrado.")
     print("Execute primeiro: python etapa2_preprocessamento.py")
@@ -431,7 +438,8 @@ for cls, th in sorted(thresholds.items()):
     print(f"    {cls}: {th:.2f}")
 
 # Salva thresholds junto com o encoder
-with open("thresholds.pkl", "wb") as f:
+thresholds_saida = os.path.join(MODELS_DIR, "thresholds.pkl")
+with open(thresholds_saida, "wb") as f:
     pickle.dump(thresholds, f)
 
 model.save(MODELO_SAIDA)
@@ -440,7 +448,7 @@ with open(ENCODER_SAIDA, "wb") as f:
 
 print(f"\n  Modelo salvo  : {MODELO_SAIDA}")
 print(f"  Encoder salvo : {ENCODER_SAIDA}")
-print(f"  Thresholds    : thresholds.pkl")
+print(f"  Thresholds    : {thresholds_saida}")
 
 # --- Gráficos ---
 plt.figure(figsize=(8, 5))
@@ -452,7 +460,7 @@ plt.ylabel("Acurácia")
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("resultado_treinamento.png", dpi=150, bbox_inches="tight")
+plt.savefig(os.path.join(REPORTS_DIR, "resultado_treinamento.png"), dpi=150, bbox_inches="tight")
 plt.close()
 
 plt.figure(figsize=(8, 5))
@@ -464,7 +472,7 @@ plt.ylabel("Loss")
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("resultado_loss.png", dpi=150, bbox_inches="tight")
+plt.savefig(os.path.join(REPORTS_DIR, "resultado_loss.png"), dpi=150, bbox_inches="tight")
 plt.close()
 
 plt.figure(figsize=(max(6, n_classes), max(5, n_classes - 1)))
@@ -481,9 +489,9 @@ for i in range(n_classes):
 plt.ylabel("Real")
 plt.xlabel("Previsto")
 plt.tight_layout()
-plt.savefig("matriz_confusao.png", dpi=150, bbox_inches="tight")
+plt.savefig(os.path.join(REPORTS_DIR, "matriz_confusao.png"), dpi=150, bbox_inches="tight")
 plt.close()
 
-print("  Gráficos salvos: resultado_treinamento.png | resultado_loss.png | matriz_confusao.png")
+print(f"  Graficos salvos em: {REPORTS_DIR}")
 print("\n  Próximo passo:")
 print("  python app.py")
