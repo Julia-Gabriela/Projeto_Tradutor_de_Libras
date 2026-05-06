@@ -96,16 +96,6 @@ A qualidade do modelo depende diretamente da quantidade e qualidade dos dados:
 
 ---
 
-## 🚀 Possíveis melhorias
-
-- Adicionar mais sinais  
-- Utilizar mãos + rosto + corpo (Holistic)  
-- Melhorar o dataset  
-- Implementar reconhecimento em tempo real  
-- Otimizar o modelo para maior precisão  
-
----
-
 ## 📌 Resumo
 
 O projeto transforma vídeos em dados numéricos e utiliza uma rede neural para aprender padrões de movimento, permitindo o reconhecimento automático de sinais em Libras.
