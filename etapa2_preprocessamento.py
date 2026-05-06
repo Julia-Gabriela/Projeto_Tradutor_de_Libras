@@ -59,7 +59,17 @@ mp_face_mesh = mp.solutions.face_mesh
 def extrair_label(nome_arquivo):
     sem_ext = os.path.splitext(nome_arquivo)[0]
     partes = sem_ext.rsplit("_Articulador", 1)
-    return partes[0].strip()
+    label = partes[0].strip()
+    aliases = {
+        "oi": "Oi",
+        "casa": "Casa",
+        "banheiro": "Banheiro",
+        "livro": "Livro",
+        "nome": "Nome",
+        "obrigado": "Obrigado",
+        "desconhecido": "Desconhecido",
+    }
+    return aliases.get(label.lower(), label[:1].upper() + label[1:])
 
 
 def grupo_video(nome_arquivo):
@@ -394,7 +404,7 @@ def main():
     print(f"  Sinais únicos      : {df['label'].nunique()}")
     print(f"\n  Amostras por sinal:")
     for sinal, n in sorted(amostras_por_sinal.items()):
-        status = "✓" if n >= 5 else "⚠ POUCOS DADOS"
+        status = "OK" if n >= 5 else "POUCOS DADOS"
         print(f"    {status}  {sinal}: {n} amostras")
 
     sinal_minimo = min(amostras_por_sinal.values()) if amostras_por_sinal else 0

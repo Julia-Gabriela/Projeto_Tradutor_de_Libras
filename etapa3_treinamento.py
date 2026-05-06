@@ -34,8 +34,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
     LSTM, Dense, Dropout, BatchNormalization,
-    Input, Multiply, Softmax, Lambda, Reshape,
-    GlobalAveragePooling1D, Permute, RepeatVector
+    Input, Multiply, Softmax, GlobalAveragePooling1D
 )
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras.utils import to_categorical
@@ -45,6 +44,7 @@ from tensorflow.keras import regularizers
 # CONFIGURAÇÕES
 # =========================
 ARQUIVO_CSV = "landmarks.csv"
+FEEDBACK_CSV = "feedback_landmarks.csv"
 MAX_FRAMES = 20
 N_FEATURES = 288
 
@@ -65,27 +65,81 @@ METADATA_COLS = ["source_video"]
 # AUGMENTATION MELHORADA
 # =========================
 
+def mascara_coordenadas(seq):
+    """Marca apenas coordenadas reais; preserva zeros e visibility da pose."""
+    mask = np.zeros(seq.shape, dtype=bool)
+    pose = seq[:, :132].reshape(seq.shape[0], 33, 4)
+    left_hand = seq[:, 132:195].reshape(seq.shape[0], 21, 3)
+    right_hand = seq[:, 195:258].reshape(seq.shape[0], 21, 3)
+    face = seq[:, 258:288].reshape(seq.shape[0], len(range(10)), 3)
+
+    mask_pose = mask[:, :132].reshape(seq.shape[0], 33, 4)
+    mask_left = mask[:, 132:195].reshape(seq.shape[0], 21, 3)
+    mask_right = mask[:, 195:258].reshape(seq.shape[0], 21, 3)
+    mask_face = mask[:, 258:288].reshape(seq.shape[0], len(range(10)), 3)
+
+    mask_pose[:, :, :3] = np.any(pose[:, :, :3] != 0, axis=2, keepdims=True)
+    mask_left[:, :, :] = np.any(left_hand != 0, axis=2, keepdims=True)
+    mask_right[:, :, :] = np.any(right_hand != 0, axis=2, keepdims=True)
+    mask_face[:, :, :] = np.any(face != 0, axis=2, keepdims=True)
+    return mask
+
+
+def deslocar_eixos(seq, dx=0.0, dy=0.0, dz=0.0):
+    seq = seq.copy()
+    deslocamentos = np.array([dx, dy, dz], dtype=np.float32)
+    pose = seq[:, :132].reshape(seq.shape[0], 33, 4)
+    blocos = (
+        pose[:, :, :3],
+        seq[:, 132:195].reshape(seq.shape[0], 21, 3),
+        seq[:, 195:258].reshape(seq.shape[0], 21, 3),
+        seq[:, 258:288].reshape(seq.shape[0], len(range(10)), 3),
+    )
+    for bloco in blocos:
+        mask = np.any(bloco != 0, axis=2)
+        bloco[mask] += deslocamentos
+    return seq
+
+
+def aplicar_dropout_landmarks(seq):
+    """Simula pequenas falhas de rastreamento sem criar landmarks falsos."""
+    seq = seq.copy()
+    for inicio, fim in ((132, 195), (195, 258)):
+        if np.random.rand() < 0.18:
+            bloco = seq[:, inicio:fim].reshape(seq.shape[0], 21, 3)
+            frames = np.random.choice(seq.shape[0], size=np.random.randint(1, 4), replace=False)
+            pontos = np.random.choice(21, size=np.random.randint(2, 7), replace=False)
+            bloco[np.ix_(frames, pontos)] = 0.0
+
+    if np.random.rand() < 0.12:
+        face = seq[:, 258:288].reshape(seq.shape[0], len(range(10)), 3)
+        frames = np.random.choice(seq.shape[0], size=np.random.randint(1, 4), replace=False)
+        face[frames, :, :] = 0.0
+    return seq
+
 def augmentar_sequencia(seq):
     """
     Augmentation conservadora e realista.
     Só aplica transformações que podem acontecer na vida real.
     """
     seq = seq.copy().astype(np.float32)
+    coord_mask = mascara_coordenadas(seq)
 
     # Ruído muito leve (simula tremor natural)
     if np.random.rand() > 0.4:
         intensidade = np.random.uniform(0.002, 0.006)
-        seq += np.random.normal(0, intensidade, seq.shape)
+        ruido = np.random.normal(0, intensidade, seq.shape).astype(np.float32)
+        seq[coord_mask] += ruido[coord_mask]
 
     # Escala leve (simula distância variável da câmera)
     if np.random.rand() > 0.4:
         escala = np.random.uniform(0.92, 1.08)
-        seq *= escala
+        seq[coord_mask] *= escala
 
     # Deslocamento espacial leve (simula posicionamento diferente)
     if np.random.rand() > 0.5:
-        deslocamento = np.random.normal(0, 0.02)
-        seq += deslocamento
+        dx, dy, dz = np.random.normal(0, [0.025, 0.025, 0.01])
+        seq = deslocar_eixos(seq, dx, dy, dz)
 
     # Variação de velocidade: estica ou comprime o tempo
     if np.random.rand() > 0.5:
@@ -101,8 +155,10 @@ def augmentar_sequencia(seq):
         seq = seq_novo
 
     # Espelhamento (útil para sinais simétricos)
-    if np.random.rand() > 0.5:
+    if np.random.rand() > 0.65:
         seq = espelhar_sequencia(seq)
+
+    seq = aplicar_dropout_landmarks(seq)
 
     return seq.astype(np.float32)
 
@@ -136,10 +192,6 @@ def aplicar_augmentation(X, y, n_aug=N_AUGMENTACOES):
     X_aug_list = [X]
     y_aug_list = [y]
 
-    # Sempre inclui versão espelhada
-    X_aug_list.append(np.array([espelhar_sequencia(s) for s in X], dtype=np.float32))
-    y_aug_list.append(y)
-
     # Augmentações aleatórias
     for _ in range(n_aug):
         X_novo = np.array([augmentar_sequencia(s) for s in X], dtype=np.float32)
@@ -169,13 +221,17 @@ def grupo_video(nome_video):
 def construir_modelo(n_frames, n_features, n_classes):
     inputs = Input(shape=(n_frames, n_features))
     
-    x = LSTM(64, return_sequences=True, kernel_regularizer=regularizers.l2(1e-3))(inputs)
+    x = LSTM(96, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))(inputs)
     x = BatchNormalization()(x)
-    x = Dropout(0.4)(x)
-    x = LSTM(32, return_sequences=False)(x)
+    x = Dropout(0.35)(x)
+    x = LSTM(64, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))(x)
     x = BatchNormalization()(x)
-    x = Dropout(0.4)(x)
-    x = Dense(32, activation='relu')(x)
+    x = Dropout(0.35)(x)
+    scores = Dense(1, activation="tanh", name="attention_scores")(x)
+    pesos = Softmax(axis=1, name="attention_weights")(scores)
+    contexto = Multiply(name="attention_apply")([x, pesos])
+    x = GlobalAveragePooling1D(name="attention_context")(contexto)
+    x = Dense(48, activation='relu', kernel_regularizer=regularizers.l2(8e-4))(x)
     x = Dropout(0.3)(x)
     outputs = Dense(n_classes, activation='softmax')(x)
     return Model(inputs=inputs, outputs=outputs)
@@ -195,6 +251,17 @@ if not os.path.exists(ARQUIVO_CSV):
 
 print(f"\nCarregando {ARQUIVO_CSV}...")
 df = pd.read_csv(ARQUIVO_CSV)
+
+if os.path.exists(FEEDBACK_CSV):
+    print(f"Carregando feedback coletado em {FEEDBACK_CSV}...")
+    df_feedback = pd.read_csv(FEEDBACK_CSV)
+    colunas_faltando = [c for c in df.columns if c not in df_feedback.columns]
+    if colunas_faltando:
+        print(f"  [AVISO] Feedback ignorado: {len(colunas_faltando)} colunas faltando.")
+    else:
+        df_feedback = df_feedback.reindex(columns=df.columns)
+        df = pd.concat([df, df_feedback], ignore_index=True)
+        print(f"  Feedback adicionado: {len(df_feedback)} amostras")
 
 print(f"  Shape original : {df.shape}")
 print(f"  Sinais         : {df['label'].unique().tolist()}")
@@ -252,11 +319,22 @@ else:
 print(f"\n  Treino original : {X_train_raw.shape[0]} amostras")
 print(f"  Teste           : {X_test.shape[0]} amostras")
 
+val_stratify = y_train_raw if pd.Series(y_train_raw).value_counts().min() >= 2 else None
+X_train_base, X_val, y_train_base, y_val_int = train_test_split(
+    X_train_raw,
+    y_train_raw,
+    test_size=0.20,
+    random_state=42,
+    stratify=val_stratify,
+)
+print(f"  Validacao real : {X_val.shape[0]} amostras (sem augmentation)")
+
 print(f"\n  Aplicando Data Augmentation ({N_AUGMENTACOES}x)...")
-X_train, y_train_int = aplicar_augmentation(X_train_raw, y_train_raw, N_AUGMENTACOES)
+X_train, y_train_int = aplicar_augmentation(X_train_base, y_train_base, N_AUGMENTACOES)
 print(f"  Treino após augmentation: {X_train.shape[0]} amostras")
 
 y_train = to_categorical(y_train_int, num_classes=n_classes)
+y_val = to_categorical(y_val_int, num_classes=n_classes)
 y_test = to_categorical(y_test_int, num_classes=n_classes)
 
 print("\n  Construindo modelo com atenção temporal...")
@@ -264,7 +342,7 @@ model = construir_modelo(MAX_FRAMES, N_FEATURES, n_classes)
 
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-    loss="categorical_crossentropy",
+    loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.04),
     metrics=["accuracy"]
 )
 
@@ -289,17 +367,17 @@ historico = model.fit(
     X_train, y_train,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    validation_split=0.15,
+    validation_data=(X_val, y_val),
     callbacks=callbacks,
     class_weight=class_weight,  # <-- linha adicionada
-    verbose=1
+    verbose=2
 )
 
 print("\n  Treinamento concluído!")
 
 # --- Avaliação ---
 print("\n  Avaliando no conjunto de teste...")
-y_pred_prob = model.predict(X_test)
+y_pred_prob = model.predict(X_test, verbose=0)
 y_pred = np.argmax(y_pred_prob, axis=1)
 y_true = np.argmax(y_test, axis=1)
 
@@ -321,22 +399,32 @@ confusoes.sort(reverse=True)
 for n, real, prev in confusoes[:5]:
     print(f"    '{real}' confundido com '{prev}': {n}x")
     if confusoes:
-        print("    → Dica: grave mais vídeos variados para esses sinais.")
+        print("    -> Dica: grave mais videos variados para esses sinais.")
 
 # --- Calibrar thresholds por classe ---
 print("\n  Calibrando thresholds de confiança por classe...")
 thresholds = {}
 for cls_idx in range(n_classes):
-    mask = y_true == cls_idx
-    if mask.sum() > 0:
-        confs = y_pred_prob[mask, cls_idx]
-        acertos = (y_pred[mask] == cls_idx)
-        if acertos.sum() > 0:
-            # Threshold conservador: percentil 25 das confiança dos acertos
-            threshold = float(np.percentile(confs[acertos], 25))
-        else:
-            threshold = 0.7
-        thresholds[le.classes_[cls_idx]] = max(0.5, min(0.95, threshold))
+    y_bin = (y_true == cls_idx)
+    probs_cls = y_pred_prob[:, cls_idx]
+    melhor_threshold = 0.75
+    melhor_score = -1.0
+
+    for threshold in np.linspace(0.45, 0.95, 51):
+        pred_bin = probs_cls >= threshold
+        tp = np.sum(pred_bin & y_bin)
+        fp = np.sum(pred_bin & ~y_bin)
+        fn = np.sum(~pred_bin & y_bin)
+        precision = tp / max(tp + fp, 1)
+        recall = tp / max(tp + fn, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-8)
+        precision_floor = 0.60 if le.classes_[cls_idx] not in ["Sim", "Não"] else 0.70
+
+        if precision >= precision_floor and f1 > melhor_score:
+            melhor_score = f1
+            melhor_threshold = float(threshold)
+
+    thresholds[le.classes_[cls_idx]] = max(0.55, min(0.95, melhor_threshold))
 
 print("  Thresholds por classe:")
 for cls, th in sorted(thresholds.items()):

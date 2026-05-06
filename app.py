@@ -23,6 +23,9 @@ import os
 import pickle
 import base64
 import threading
+import unicodedata
+import csv
+import time
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -37,16 +40,76 @@ app = Flask(__name__)
 # =========================
 MAX_FRAMES = 20
 N_FEATURES = 288
-LARGURA_PROCESSAMENTO = 480
+LARGURA_PROCESSAMENTO = 416
 FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
 
 # --- Parâmetros de detecção ---
 CONFIANCA_MINIMA_GLOBAL = 0.75   # Limiar padrão (sobrescrito pelos thresholds por classe)
 MARGEM_MINIMA = 0.35           # Diferença mínima entre 1º e 2º lugar
-VOTOS_NECESSARIOS = 4            # De 5 predições, quantas precisam concordar
-JANELA_PREDICOES = 5             # Tamanho da janela de votação
-DEBOUNCE_FRAMES = 15             # Frames para esperar antes de aceitar o mesmo sinal de novo
+VOTOS_NECESSARIOS = 2            # De 3 predições, quantas precisam concordar
+JANELA_PREDICOES = 3             # Tamanho da janela de votação
+DEBOUNCE_FRAMES = 10             # Frames para esperar antes de aceitar o mesmo sinal de novo
 MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
+FRAMES_SEM_MAOS_TOLERANCIA = 4  # Evita resetar tudo quando o MediaPipe pisca por poucos frames
+MIN_FRAMES_VALIDOS_PREDICAO = 8
+FEEDBACK_CSV = "feedback_landmarks.csv"
+
+# Ajustes práticos para a demo: sinais que estão gerando falso positivo
+# precisam ser mais difíceis de aceitar do que sinais que o modelo quase não libera.
+THRESHOLDS_DEMO = {
+    "Sim": 0.90,
+    "Não": 0.68,
+    "Nao": 0.68,
+    "Obrigado": 0.78,
+    "Oi": 0.67,
+    "Casa": 0.90,
+}
+MARGENS_DEMO = {
+    "Sim": 0.58,
+    "Não": 0.48,
+    "Nao": 0.48,
+    "Obrigado": 0.28,
+    "Oi": 0.35,
+    "Casa": 0.35,
+}
+VOTOS_DEMO = {
+    "Sim": 5,
+    "Não": 4,
+    "Nao": 4,
+    "Obrigado": 4,
+    "Oi": 4,
+    "Casa": 4,
+}
+LABELS_REJEICAO = {"Desconhecido", "Desconhecida", "Neutro", "Fundo", "Nada", "Outro"}
+
+# Recalibrado depois do treino com Banheiro/Casa/Desconhecido/Livro/Nome/Obrigado/Oi.
+THRESHOLDS_DEMO = {
+    "Banheiro": 0.75,
+    "Casa": 0.92,
+    "Desconhecido": 0.72,
+    "Livro": 0.75,
+    "Nome": 0.79,
+    "Obrigado": 0.55,
+    "Oi": 0.81,
+}
+MARGENS_DEMO = {
+    "Banheiro": 0.35,
+    "Casa": 0.35,
+    "Desconhecido": 0.25,
+    "Livro": 0.35,
+    "Nome": 0.35,
+    "Obrigado": 0.28,
+    "Oi": 0.35,
+}
+VOTOS_DEMO = {
+    "Banheiro": 2,
+    "Casa": 2,
+    "Desconhecido": 2,
+    "Livro": 2,
+    "Nome": 2,
+    "Obrigado": 2,
+    "Oi": 2,
+}
 
 # Estado global
 frame_buffer = deque(maxlen=MAX_FRAMES)
@@ -54,6 +117,10 @@ historico_predicoes = deque(maxlen=JANELA_PREDICOES)
 ultimo_features = None
 debounce_counter = 0
 ultimo_label_aceito = None
+frames_sem_maos = 0
+ultima_seq_feedback = None
+ultimo_label_feedback = None
+ultima_conf_feedback = 0.0
 
 # Locks
 hands_lock = threading.Lock()
@@ -61,7 +128,7 @@ pose_face_lock = threading.Lock()
 
 # Cache de pose/rosto (processados a cada N frames)
 visual_frame_count = 0
-PROCESSAR_POSE_ROSTO_A_CADA = 2
+PROCESSAR_POSE_ROSTO_A_CADA = 3
 ultimo_pose_features = [0.0] * (33 * 4)
 ultimo_face_features = [0.0] * (len(FACE_INDICES) * 3)
 ultimo_visual_pose = []
@@ -88,8 +155,16 @@ if os.path.exists("thresholds.pkl"):
 else:
     print("thresholds.pkl não encontrado. Usando limiar global.")
 
+def chave_label(label):
+    return unicodedata.normalize("NFKD", str(label)).encode("ascii", "ignore").decode("ascii")
+
+
+def eh_label_rejeicao(label):
+    return chave_label(label) in LABELS_REJEICAO
+
+
 def get_threshold(label):
-    return thresholds_por_classe.get(label, CONFIANCA_MINIMA_GLOBAL)
+    return THRESHOLDS_DEMO.get(chave_label(label), thresholds_por_classe.get(label, CONFIANCA_MINIMA_GLOBAL))
 
 # =========================
 # MEDIAPIPE
@@ -320,6 +395,16 @@ h1 span { color:var(--accent); }
         <div class="card-title"><span class="dot"></span>Sinal Detectado</div>
         <div class="sinal-label" id="sinaLabel">—</div>
         <div class="waiting-text" id="waitingText">Inicie a câmera para começar</div>
+        <div class="btn-row">
+          <button class="btn-mini" onclick="enviarFeedbackAcerto()">Acertou</button>
+          <select class="btn-mini" id="feedbackLabel">
+            {% for l in labels %}
+            <option value="{{ l }}">{{ l }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn-mini" onclick="enviarFeedbackCorrecao()">Corrigir</button>
+        </div>
+        <div class="waiting-text" id="feedbackStatus"></div>
         <div class="debug-row">
           <span class="dbg-chip" id="chipMaos">✋ Mãos: 0</span>
           <span class="dbg-chip" id="chipRosto">😐 Rosto</span>
@@ -372,6 +457,12 @@ const ctx = overlay.getContext('2d');
 let historico = [];
 let frase = [];
 let primeiroHistorico = true;
+let vozAutomatica = true;
+let framesSemSinal = 0;
+let enviandoFrame = false;
+let ultimoLabelFeedback = null;
+let ultimaConfFeedback = 0;
+const FRAMES_PARA_LIMPAR_SINAL = 6;
 
 async function toggleCamera() {
   if (!cameraAtiva) {
@@ -379,11 +470,12 @@ async function toggleCamera() {
       stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
       video.srcObject = stream;
       await video.play();
+      await resetarBackend();
       cameraAtiva = true;
       document.getElementById('btnCamera').textContent = '⏹ Parar Câmera';
       document.getElementById('camStatus').classList.add('active');
       document.getElementById('statusText').textContent = 'Ao vivo';
-      intervalo = setInterval(enviarFrame, 120);
+      intervalo = setInterval(enviarFrame, 80);
     } catch (e) {
       alert('Não foi possível acessar a câmera: ' + e.message);
     }
@@ -400,7 +492,27 @@ function pararCamera() {
   document.getElementById('camStatus').classList.remove('active');
   document.getElementById('statusText').textContent = 'Câmera desligada';
   document.getElementById('confBarWrap').classList.remove('visible');
+  limparSinalAtual();
+  ultimoLabelFeedback = null;
+  ultimaConfFeedback = 0;
+  document.getElementById('feedbackStatus').textContent = '';
+  resetarBackend();
   ctx.clearRect(0, 0, overlay.width, overlay.height);
+}
+
+function limparSinalAtual() {
+  const el = document.getElementById('sinaLabel');
+  el.textContent = '-';
+  el.classList.remove('flash');
+  framesSemSinal = 0;
+}
+
+async function resetarBackend() {
+  try {
+    await fetch('/reset', { method: 'POST' });
+  } catch (e) {
+    console.warn('Nao foi possivel resetar o backend:', e);
+  }
 }
 
 function capturarFrame() {
@@ -412,7 +524,8 @@ function capturarFrame() {
 }
 
 async function enviarFrame() {
-  if (!cameraAtiva || video.readyState < 2) return;
+  if (!cameraAtiva || video.readyState < 2 || enviandoFrame) return;
+  enviandoFrame = true;
   overlay.width = video.clientWidth;
   overlay.height = video.clientHeight;
 
@@ -427,6 +540,8 @@ async function enviarFrame() {
     processarResposta(data);
   } catch (e) {
     console.error('Erro ao enviar frame:', e);
+  } finally {
+    enviandoFrame = false;
   }
 }
 
@@ -471,10 +586,61 @@ function processarResposta(data) {
 
     adicionarHistorico(data.label, data.confidence);
     adicionarFrase(data.label);
+    ultimoLabelFeedback = data.label;
+    ultimaConfFeedback = data.confidence || 0;
+    document.getElementById('feedbackStatus').textContent =
+      `Ultimo para feedback: ${data.label} (${Math.round(ultimaConfFeedback * 100)}%)`;
+    framesSemSinal = 0;
+  } else {
+    framesSemSinal += 1;
+    const waiting = data.waiting || '';
+    const deveLimparAgora =
+      maos <= 0 ||
+      waiting.includes('vocabul') ||
+      waiting.includes('Mostre as') ||
+      waiting.includes('Ajuste as');
+
+    if (deveLimparAgora || framesSemSinal >= FRAMES_PARA_LIMPAR_SINAL) {
+      limparSinalAtual();
+    }
   }
 
   // Desenha landmarks
   desenharLandmarks(data.visual || {});
+}
+
+async function enviarFeedback(label) {
+  const status = document.getElementById('feedbackStatus');
+  if (!label || label === '—' || label === '-') {
+    status.textContent = 'Nenhum sinal recente para salvar.';
+    return;
+  }
+
+  status.textContent = 'Salvando exemplo...';
+  try {
+    const res = await fetch('/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label })
+    });
+    const data = await res.json();
+    status.textContent = data.ok
+      ? `Exemplo salvo como ${data.label}.`
+      : (data.error || 'Nao foi possivel salvar.');
+  } catch (e) {
+    status.textContent = 'Erro ao salvar feedback.';
+  }
+}
+
+function enviarFeedbackAcerto() {
+  const labelAtual = document.getElementById('sinaLabel').textContent.trim();
+  const labelFeedback = labelAtual && labelAtual !== '-' ? labelAtual : ultimoLabelFeedback;
+  enviarFeedback(labelFeedback);
+}
+
+function enviarFeedbackCorrecao() {
+  const labelCorreto = document.getElementById('feedbackLabel').value;
+  enviarFeedback(labelCorreto);
 }
 
 function adicionarHistorico(label, conf) {
@@ -499,6 +665,7 @@ function adicionarHistorico(label, conf) {
 function adicionarFrase(label) {
   frase.push(label);
   atualizarFrase();
+  if (vozAutomatica) falarTexto(label);
 }
 
 function atualizarFrase() {
@@ -509,6 +676,24 @@ function atualizarFrase() {
 function removerUltima() {
   frase.pop();
   atualizarFrase();
+}
+
+function falarTexto(texto) {
+  if (!('speechSynthesis' in window) || !texto) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(texto);
+  utterance.lang = 'pt-BR';
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  window.speechSynthesis.speak(utterance);
+}
+
+function falarFrase() {
+  falarTexto(frase.join(' '));
+}
+
+function alternarVoz() {
+  vozAutomatica = !vozAutomatica;
 }
 
 function limparFrase() {
@@ -727,6 +912,18 @@ def calcular_movimento(features_atual, features_anterior):
     return float(np.mean(np.abs(maos_atual - maos_anterior)) * 0.9 +
              np.mean(np.abs(pose_atual - pose_anterior)) * 0.1)
 
+
+def calcular_movimento_sequencia(buffer):
+    if len(buffer) < 2:
+        return 0.0
+    frames = list(buffer)
+    movimentos = [
+        calcular_movimento(frames[i], frames[i - 1])
+        for i in range(1, len(frames))
+    ]
+    return float(np.percentile(movimentos, 75))
+
+
 def votar_predicao(historico_pred):
     """
     Votação ponderada: predicões mais recentes têm mais peso.
@@ -737,35 +934,109 @@ def votar_predicao(historico_pred):
 
     # Peso crescente para predicções mais recentes
     pesos = np.linspace(0.5, 1.0, len(historico_pred))
+    probs_hist = np.array([p[0] for p in historico_pred], dtype=np.float32)
+    probs_media = np.average(probs_hist, axis=0, weights=pesos)
 
-    labels_pred = [p[0] for p in historico_pred]
-    confs_pred = [p[1] for p in historico_pred]
+    idx_vencedor = int(np.argmax(probs_media))
+    ordem = np.argsort(probs_media)[::-1]
+    conf_media = float(probs_media[idx_vencedor])
+    idx_segundo = int(ordem[1]) if len(ordem) > 1 else idx_vencedor
+    segunda_conf = float(probs_media[idx_segundo]) if len(ordem) > 1 else 0.0
+    margem_media = conf_media - segunda_conf
 
-    # Conta votos ponderados por label
-    votos_por_label = {}
-    for i, (lbl, conf) in enumerate(zip(labels_pred, confs_pred)):
-        votos_por_label[lbl] = votos_por_label.get(lbl, 0) + pesos[i]
+    top_indices = [int(np.argmax(p[0])) for p in historico_pred]
+    votos_vencedor = sum(1 for idx in top_indices if idx == idx_vencedor)
 
-    # Label com mais votos ponderados
-    label_vencedor = max(votos_por_label, key=votos_por_label.get)
-    votos_vencedor = sum(1 for l in labels_pred if l == label_vencedor)
-    conf_media = float(np.mean([c for l, c in zip(labels_pred, confs_pred) if l == label_vencedor]))
+    return labels[idx_vencedor], conf_media, votos_vencedor, margem_media, labels[idx_segundo], segunda_conf
 
-    return label_vencedor, conf_media, votos_vencedor
+
+def gerar_colunas_feedback():
+    colunas = []
+    for f in range(MAX_FRAMES):
+        for p in range(33):
+            colunas += [f"f{f}_pose{p}_x", f"f{f}_pose{p}_y", f"f{f}_pose{p}_z", f"f{f}_pose{p}_v"]
+        for p in range(21):
+            colunas += [f"f{f}_left_hand{p}_x", f"f{f}_left_hand{p}_y", f"f{f}_left_hand{p}_z"]
+        for p in range(21):
+            colunas += [f"f{f}_right_hand{p}_x", f"f{f}_right_hand{p}_y", f"f{f}_right_hand{p}_z"]
+        for p in FACE_INDICES:
+            colunas += [f"f{f}_face{p}_x", f"f{f}_face{p}_y", f"f{f}_face{p}_z"]
+    colunas.append("source_video")
+    colunas.append("label")
+    return colunas
+
+
+def salvar_feedback(label):
+    if ultima_seq_feedback is None:
+        return False, "Nenhuma sequencia recente para salvar."
+
+    seq = np.array(ultima_seq_feedback, dtype=np.float32).reshape(MAX_FRAMES, N_FEATURES)
+    linha = seq.reshape(-1).astype(float).tolist()
+    linha.append(f"feedback_{int(time.time() * 1000)}")
+    linha.append(label)
+
+    escrever_cabecalho = not os.path.exists(FEEDBACK_CSV) or os.path.getsize(FEEDBACK_CSV) == 0
+    with open(FEEDBACK_CSV, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if escrever_cabecalho:
+            writer.writerow(gerar_colunas_feedback())
+        writer.writerow(linha)
+
+    return True, "Exemplo salvo."
 
 
 # =========================
 # ROTAS
 # =========================
 
+def resetar_estado_inferencia():
+    global ultimo_features, debounce_counter, ultimo_label_aceito, frames_sem_maos
+    frame_buffer.clear()
+    historico_predicoes.clear()
+    ultimo_features = None
+    debounce_counter = 0
+    ultimo_label_aceito = None
+    frames_sem_maos = 0
+
+
 @app.route("/")
 def index():
     return render_template_string(HTML, labels=labels)
 
 
+@app.route("/reset", methods=["POST"])
+def reset():
+    resetar_estado_inferencia()
+    return jsonify({"ok": True})
+
+
+@app.route("/feedback", methods=["POST"])
+def feedback():
+    data = request.get_json() or {}
+    label = str(data.get("label", "")).strip()
+
+    if not label or label == "-":
+        return jsonify({"ok": False, "error": "Escolha um sinal valido."}), 400
+    if label not in labels:
+        return jsonify({"ok": False, "error": "Sinal fora da lista do modelo."}), 400
+
+    ok, mensagem = salvar_feedback(label)
+    if not ok:
+        return jsonify({"ok": False, "error": mensagem}), 400
+
+    return jsonify({
+        "ok": True,
+        "label": label,
+        "predito": ultimo_label_feedback,
+        "confidence": ultima_conf_feedback,
+        "message": mensagem
+    })
+
+
 @app.route("/predict", methods=["POST"])
 def predict():
-    global ultimo_features, debounce_counter, ultimo_label_aceito
+    global ultimo_features, debounce_counter, ultimo_label_aceito, frames_sem_maos
+    global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
 
     data = request.get_json()
     b64 = data.get("frame", "")
@@ -784,43 +1055,31 @@ def predict():
 
     # Sem mãos → reseta tudo
     if debug["hands"] <= 0:
+        frames_sem_maos += 1
+        debounce_counter = max(0, debounce_counter - 1)
+        if frames_sem_maos <= FRAMES_SEM_MAOS_TOLERANCIA and len(frame_buffer) > 0:
+            return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
+                            "waiting": "Mantendo leitura..."})
+
         frame_buffer.clear()
         historico_predicoes.clear()
         ultimo_features = None
-        debounce_counter = max(0, debounce_counter - 1)
         return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
                         "waiting": "Mostre as mãos para a câmera."})
+
+    frames_sem_maos = 0
 
     # Calcula movimento
     movimento = calcular_movimento(features, ultimo_features)
     ultimo_features = features.copy()
 
-    # ❌ BLOQUEIA ruído e ausência de movimento (VERSÃO CORRIGIDA)
-    if movimento < MOVIMENTO_MINIMO * 2:
-        frame_buffer.clear()
-        historico_predicoes.clear()
-        return jsonify({
-            "label": None,
-            "confidence": 0.0,
-            "visual": visual,
-            "debug": debug,
-            "waiting": "Sem movimento detectado..."
-        })
-    if movimento < MOVIMENTO_MINIMO * 2:
-        return jsonify({
-            "label": None,
-            "confidence": 0.0,
-            "visual": visual,
-            "debug": debug,
-            "waiting": "Movimento insuficiente..."
-        })
-  
     # Se houver muito movimento (troca de sinal), reseta o buffer
     if movimento > 0.03 and len(frame_buffer) > 5:
         frame_buffer.clear()
         historico_predicoes.clear()
 
     frame_buffer.append(features)
+    movimento_seq = calcular_movimento_sequencia(frame_buffer)
 
 # Verifica se há frames suficientes com mãos válidas
     frames_validos = sum(
@@ -828,7 +1087,7 @@ def predict():
         if np.sum(np.abs(f[132:258])) > 0
 )
 
-    if frames_validos < 10:
+    if frames_validos < MIN_FRAMES_VALIDOS_PREDICAO:
         return jsonify({
             "label": None,
             "confidence": 0.0,
@@ -849,13 +1108,16 @@ def predict():
     idx = int(np.argmax(probs))
     conf = float(probs[idx])
     label_previsto = labels[idx]
+    ultima_seq_feedback = X.reshape(MAX_FRAMES, N_FEATURES).copy()
+    ultimo_label_feedback = label_previsto
+    ultima_conf_feedback = conf
     ordem_probs = np.argsort(probs)[::-1]
     segunda_conf = float(probs[ordem_probs[1]]) if len(ordem_probs) > 1 else 0.0
     margem = conf - segunda_conf
 
-    historico_predicoes.append((label_previsto, conf, margem))
+    historico_predicoes.append((probs, conf, margem))
 
-    print(f"Pred: {label_previsto} | Conf: {conf:.3f} | Margem: {margem:.3f} | Mov: {movimento:.4f}")
+    print(f"Pred: {label_previsto} | Conf: {conf:.3f} | Margem: {margem:.3f} | Mov: {movimento:.4f} | Seq: {movimento_seq:.4f}")
 
     # Debounce: desconta contador a cada frame
     if debounce_counter > 0:
@@ -867,30 +1129,35 @@ def predict():
     conf_voto = conf  # fallback seguro
     
     if resultado_voto:
-        label_voto, conf_voto, votos = resultado_voto
+        label_voto, conf_voto, votos, margem_voto, segundo_label, segunda_conf_voto = resultado_voto
         threshold = get_threshold(label_voto)
 
-        # Regras especiais para sinais parecidos
-        margem_ajustada = MARGEM_MINIMA
-
-        # Regras especiais para sinais parecidos
-        margem_ajustada = MARGEM_MINIMA
         # Regras especiais para sinais parecidos
         margem_ajustada = MARGEM_MINIMA
 
         if label_voto in ["Sim", "Não"]:
             margem_ajustada = 0.45  # mais rigor pra evitar confusão
 
+        label_chave = chave_label(label_voto)
+        margem_ajustada = MARGENS_DEMO.get(label_chave, margem_ajustada)
+        votos_necessarios = VOTOS_DEMO.get(label_chave, VOTOS_NECESSARIOS)
+        conflito_sim_obrigado = (
+            label_voto == "Sim" and
+            segundo_label == "Obrigado" and
+            segunda_conf_voto >= 0.25
+        )
+
         aceitar = (
-            votos >= VOTOS_NECESSARIOS and
+            votos >= votos_necessarios and
             conf_voto >= threshold and
-            margem >= margem_ajustada and
-            movimento > MOVIMENTO_MINIMO * 3 and
-            debounce_counter == 0
+            margem_voto >= margem_ajustada and
+            movimento_seq > MOVIMENTO_MINIMO * 2 and
+            debounce_counter == 0 and
+            not conflito_sim_obrigado
         )
 
         if aceitar:
-            label_final = label_voto
+            label_final = None if eh_label_rejeicao(label_voto) else label_voto
             debounce_counter = DEBOUNCE_FRAMES
             ultimo_label_aceito = label_voto
             # Reseta buffer parcialmente para permitir próximo sinal
@@ -901,8 +1168,13 @@ def predict():
 
     waiting_msg = (
         f"Analisando: {label_previsto} ({conf * 100:.0f}%) | "
-        f"margem {margem * 100:.0f}% | mov {movimento:.4f}"
+        f"margem {margem * 100:.0f}% | mov {movimento_seq:.4f}"
     )
+    if resultado_voto and not label_final:
+        if eh_label_rejeicao(label_voto):
+            waiting_msg = "Gesto fora do vocabulário."
+        else:
+            waiting_msg += f" | voto {label_voto} {conf_voto * 100:.0f}%"
     if debounce_counter > 0 and not label_final:
         waiting_msg = f"Aguardando próximo sinal... ({debounce_counter})"
 
