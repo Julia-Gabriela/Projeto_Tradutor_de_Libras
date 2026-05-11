@@ -62,6 +62,16 @@ h1 span { color:var(--accent); }
 .active .pulse { background:var(--green); animation:blink 1s infinite; }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
 
+.perf-panel {
+  position:absolute; top:.75rem; right:.75rem;
+  display:none; gap:.5rem; align-items:center; flex-wrap:wrap;
+  background:rgba(0,0,0,.7); backdrop-filter:blur(6px);
+  border:1px solid var(--border); border-radius:999px;
+  padding:.3rem .7rem; font-size:.65rem; color:var(--muted);
+}
+.perf-panel.visible { display:flex; }
+.perf-panel strong { color:var(--text); font-weight:700; }
+
 /* Barra de confiança em tempo real */
 .conf-bar-wrap {
   position:absolute; bottom:.75rem; left:.75rem; right:.75rem;
@@ -150,10 +160,37 @@ h1 span { color:var(--accent); }
   flex:1; padding:.4rem; background:transparent;
   border:1px solid var(--border); border-radius:8px;
   font-size:.72rem; cursor:pointer; color:var(--muted); transition:.2s;
+  min-height:2rem;
 }
 .btn-mini:hover { border-color:var(--accent); color:var(--accent); }
+.btn-mini.primary {
+  background:rgba(0,229,255,.1);
+  border-color:rgba(0,229,255,.35);
+  color:var(--accent);
+}
+.btn-mini.active {
+  background:rgba(0,255,136,.1);
+  border-color:rgba(0,255,136,.4);
+  color:var(--green);
+}
 .btn-mini.danger:hover { border-color:var(--danger); color:var(--danger); }
+.voice-row { margin-top:.75rem; }
+.voice-status {
+  margin-top:.65rem;
+  font-size:.72rem;
+  color:var(--green);
+  min-height:1rem;
+}
 
 @media(max-width:740px) {
   .grid { grid-template-columns:1fr; }
+  .btn-row { flex-wrap:wrap; }
+  .btn-mini { min-width:7.5rem; }
+  .perf-panel {
+    left:.75rem;
+    right:.75rem;
+    top:2.8rem;
+    justify-content:space-between;
+    border-radius:8px;
+  }
 }

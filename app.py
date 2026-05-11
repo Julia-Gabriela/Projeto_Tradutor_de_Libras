@@ -20,6 +20,8 @@ ACESSAR:
 """
 
 import os
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 import pickle
 import base64
 import threading
@@ -32,6 +34,8 @@ import mediapipe as mp
 import tensorflow as tf
 from flask import Flask, render_template, request, jsonify
 from collections import deque
+
+inicio_app = time.perf_counter()
 
 app = Flask(
     __name__,
@@ -61,6 +65,8 @@ DEBOUNCE_FRAMES = 10             # Frames para esperar antes de aceitar o mesmo 
 MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
 FRAMES_SEM_MAOS_TOLERANCIA = 4  # Evita resetar tudo quando o MediaPipe pisca por poucos frames
 MIN_FRAMES_VALIDOS_PREDICAO = 8
+CONFIANCA_REJEICAO_PROXIMA = 0.35
+MARGEM_REJEICAO_PROXIMA = 0.18
 FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
 DEBUG_PREDICOES = False
 
@@ -76,6 +82,7 @@ historico_predicoes = deque(maxlen=JANELA_PREDICOES)
 ultimo_features = None
 debounce_counter = 0
 frames_sem_maos = 0
+ultimo_label_emitido = None
 ultima_seq_feedback = None
 ultimo_label_feedback = None
 ultima_conf_feedback = 0.0
@@ -96,13 +103,18 @@ ultimo_visual_face = []
 # CARREGAR MODELO
 # =========================
 print("Carregando modelo...")
+inicio_modelo = time.perf_counter()
 model = tf.keras.models.load_model(MODEL_PATH)
 
 with open(ENCODER_PATH, "rb") as f:
     le = pickle.load(f)
 
 labels = le.classes_.tolist()
-print(f"Modelo carregado! Sinais: {labels}")
+print(f"Modelo carregado em {time.perf_counter() - inicio_modelo:.2f}s! Sinais: {labels}")
+
+inicio_warmup = time.perf_counter()
+model.predict(np.zeros((1, MAX_FRAMES, N_FEATURES), dtype=np.float32), verbose=0)
+print(f"Modelo aquecido em {time.perf_counter() - inicio_warmup:.2f}s.")
 
 # Carrega thresholds calibrados (se existir)
 thresholds_por_classe = {}
@@ -131,6 +143,16 @@ def get_margem_minima(label):
 
 def get_votos_necessarios(label):
     return VOTOS_MANUAIS.get(chave_label(label), VOTOS_NECESSARIOS)
+
+
+def deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, margem_voto):
+    if eh_label_rejeicao(label_voto):
+        return True
+    return (
+        eh_label_rejeicao(segundo_label) and
+        segunda_conf >= CONFIANCA_REJEICAO_PROXIMA and
+        margem_voto <= MARGEM_REJEICAO_PROXIMA
+    )
 
 # =========================
 # MEDIAPIPE
@@ -393,13 +415,14 @@ def salvar_feedback(label):
 # =========================
 
 def resetar_estado_inferencia():
-    global ultimo_features, debounce_counter, frames_sem_maos
+    global ultimo_features, debounce_counter, frames_sem_maos, ultimo_label_emitido
     global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
     frame_buffer.clear()
     historico_predicoes.clear()
     ultimo_features = None
     debounce_counter = 0
     frames_sem_maos = 0
+    ultimo_label_emitido = None
     ultima_seq_feedback = None
     ultimo_label_feedback = None
     ultima_conf_feedback = 0.0
@@ -408,6 +431,16 @@ def resetar_estado_inferencia():
 @app.route("/")
 def index():
     return render_template("index.html", labels=labels)
+
+
+@app.route("/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "labels": labels,
+        "modelo": os.path.basename(MODEL_PATH),
+        "uptime_s": round(time.perf_counter() - inicio_app, 2)
+    })
 
 
 @app.route("/reset", methods=["POST"])
@@ -442,6 +475,7 @@ def feedback():
 @app.route("/predict", methods=["POST"])
 def predict():
     global ultimo_features, debounce_counter, frames_sem_maos
+    global ultimo_label_emitido
     global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
 
     data = request.get_json(silent=True) or {}
@@ -470,6 +504,7 @@ def predict():
         frame_buffer.clear()
         historico_predicoes.clear()
         ultimo_features = None
+        ultimo_label_emitido = None
         return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
                         "waiting": "Mostre as mãos para a câmera."})
 
@@ -537,22 +572,29 @@ def predict():
     conf_voto = conf  # fallback seguro
     
     if resultado_voto:
-        label_voto, conf_voto, votos, margem_voto, _, _ = resultado_voto
+        label_voto, conf_voto, votos, margem_voto, segundo_label, segunda_conf = resultado_voto
         threshold = get_threshold(label_voto)
 
         margem_ajustada = get_margem_minima(label_voto)
         votos_necessarios = get_votos_necessarios(label_voto)
+        rejeitar_por_desconhecido = deve_rejeitar_por_desconhecido(
+            label_voto, segundo_label, segunda_conf, margem_voto
+        )
+        repeticao_do_mesmo_sinal = label_voto == ultimo_label_emitido
 
         aceitar = (
             votos >= votos_necessarios and
             conf_voto >= threshold and
             margem_voto >= margem_ajustada and
             movimento_seq > MOVIMENTO_MINIMO * 2 and
-            debounce_counter == 0
+            debounce_counter == 0 and
+            not rejeitar_por_desconhecido and
+            not repeticao_do_mesmo_sinal
         )
 
         if aceitar:
-            label_final = None if eh_label_rejeicao(label_voto) else label_voto
+            label_final = label_voto
+            ultimo_label_emitido = label_voto
             debounce_counter = DEBOUNCE_FRAMES
             # Reseta buffer parcialmente para permitir próximo sinal
             for _ in range(MAX_FRAMES // 2):
@@ -565,8 +607,10 @@ def predict():
         f"margem {margem * 100:.0f}% | mov {movimento_seq:.4f}"
     )
     if resultado_voto and not label_final:
-        if eh_label_rejeicao(label_voto):
+        if deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, margem_voto):
             waiting_msg = "Gesto fora do vocabulário."
+        elif label_voto == ultimo_label_emitido:
+            waiting_msg = f"{label_voto} ja foi registrado. Troque de sinal ou abaixe as maos."
         else:
             waiting_msg += f" | voto {label_voto} {conf_voto * 100:.0f}%"
     if debounce_counter > 0 and not label_final:
@@ -585,7 +629,7 @@ def predict():
 
 if __name__ == "__main__":
     print("\n" + "=" * 50)
-    print("  Servidor iniciado!")
+    print(f"  Servidor iniciado em {time.perf_counter() - inicio_app:.2f}s!")
     print("  Acesse: http://localhost:5000")
     print("=" * 50 + "\n")
     app.run(debug=False, port=5000, threaded=False)

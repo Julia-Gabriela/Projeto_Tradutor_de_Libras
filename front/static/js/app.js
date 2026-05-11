@@ -12,6 +12,8 @@ let framesSemSinal = 0;
 let enviandoFrame = false;
 let ultimoLabelFeedback = null;
 let ultimaConfFeedback = 0;
+let ultimoFrameRecebidoEm = null;
+let fpsSuavizado = null;
 const FRAMES_PARA_LIMPAR_SINAL = 6;
 
 async function toggleCamera() {
@@ -42,6 +44,11 @@ function pararCamera() {
   document.getElementById('camStatus').classList.remove('active');
   document.getElementById('statusText').textContent = 'Câmera desligada';
   document.getElementById('confBarWrap').classList.remove('visible');
+  document.getElementById('perfPanel').classList.remove('visible');
+  ultimoFrameRecebidoEm = null;
+  fpsSuavizado = null;
+  document.getElementById('fpsValue').textContent = '--';
+  document.getElementById('latencyValue').textContent = '-- ms';
   limparSinalAtual();
   ultimoLabelFeedback = null;
   ultimaConfFeedback = 0;
@@ -80,6 +87,7 @@ async function enviarFrame() {
   overlay.height = video.clientHeight;
 
   const b64 = capturarFrame();
+  const inicioReq = performance.now();
   try {
     const res = await fetch('/predict', {
       method: 'POST',
@@ -87,6 +95,7 @@ async function enviarFrame() {
       body: JSON.stringify({ frame: b64 })
     });
     const data = await res.json();
+    data.client_latency_ms = performance.now() - inicioReq;
     processarResposta(data);
   } catch (e) {
     console.error('Erro ao enviar frame:', e);
@@ -96,6 +105,8 @@ async function enviarFrame() {
 }
 
 function processarResposta(data) {
+  atualizarPerformance(data.client_latency_ms);
+
   // Debug chips
   const maos = data.debug?.hands || 0;
   const rosto = data.debug?.face || false;
@@ -134,8 +145,8 @@ function processarResposta(data) {
     void el.offsetWidth;
     el.classList.add('flash');
 
-    adicionarHistorico(data.label, data.confidence);
-    adicionarFrase(data.label);
+    const fraseAtualizada = adicionarFrase(data.label);
+    if (fraseAtualizada) adicionarHistorico(data.label, data.confidence);
     ultimoLabelFeedback = data.label;
     ultimaConfFeedback = data.confidence || 0;
     document.getElementById('feedbackStatus').textContent =
@@ -157,6 +168,20 @@ function processarResposta(data) {
 
   // Desenha landmarks
   desenharLandmarks(data.visual || {});
+}
+
+function atualizarPerformance(latenciaMs) {
+  const agora = performance.now();
+  if (ultimoFrameRecebidoEm !== null) {
+    const delta = Math.max(agora - ultimoFrameRecebidoEm, 1);
+    const fpsAtual = 1000 / delta;
+    fpsSuavizado = fpsSuavizado === null ? fpsAtual : (fpsSuavizado * 0.8) + (fpsAtual * 0.2);
+  }
+  ultimoFrameRecebidoEm = agora;
+
+  document.getElementById('perfPanel').classList.add('visible');
+  document.getElementById('fpsValue').textContent = fpsSuavizado === null ? '--' : fpsSuavizado.toFixed(1);
+  document.getElementById('latencyValue').textContent = `${Math.round(latenciaMs)} ms`;
 }
 
 async function enviarFeedback(label) {
@@ -213,9 +238,16 @@ function adicionarHistorico(label, conf) {
 }
 
 function adicionarFrase(label) {
+  const ultimoLabel = frase.length > 0 ? frase[frase.length - 1] : null;
+  if (ultimoLabel === label) {
+    atualizarEstadoVoz('Sinal repetido ignorado na frase');
+    return false;
+  }
+
   frase.push(label);
   atualizarFrase();
   if (vozAutomatica) falarTexto(label);
+  return true;
 }
 
 function atualizarFrase() {
@@ -239,16 +271,43 @@ function falarTexto(texto) {
 }
 
 function falarFrase() {
-  falarTexto(frase.join(' '));
+  const texto = frase.join(' ').trim();
+  if (!texto) {
+    const status = document.getElementById('voiceStatus');
+    status.textContent = 'Nenhuma palavra na frase para falar.';
+    status.style.color = 'var(--warn)';
+    return;
+  }
+  falarTexto(texto);
+  atualizarEstadoVoz('Falando frase completa');
 }
 
 function alternarVoz() {
   vozAutomatica = !vozAutomatica;
+  atualizarEstadoVoz();
+}
+
+function pararVoz() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  atualizarEstadoVoz('Voz interrompida');
+}
+
+function atualizarEstadoVoz(mensagemTemporaria) {
+  const btn = document.getElementById('btnVozAuto');
+  const status = document.getElementById('voiceStatus');
+
+  btn.textContent = vozAutomatica ? 'Voz auto: ligada' : 'Voz auto: desligada';
+  btn.classList.toggle('active', vozAutomatica);
+  btn.setAttribute('aria-pressed', vozAutomatica ? 'true' : 'false');
+
+  status.textContent = mensagemTemporaria || (vozAutomatica ? 'Voz automática ligada' : 'Voz automática desligada');
+  status.style.color = vozAutomatica ? 'var(--green)' : 'var(--muted)';
 }
 
 function limparFrase() {
   frase = [];
   atualizarFrase();
+  pararVoz();
 }
 
 function limparHistorico() {
@@ -296,3 +355,5 @@ function desenharLandmarks(visual) {
     });
   }
 }
+
+atualizarEstadoVoz();

@@ -24,6 +24,10 @@
           <div class="pulse"></div>
           <span id="statusText">Câmera desligada</span>
         </div>
+        <div class="perf-panel" id="perfPanel">
+          <span>FPS <strong id="fpsValue">--</strong></span>
+          <span>Latência <strong id="latencyValue">-- ms</strong></span>
+        </div>
         <!-- Barra de confiança em tempo real -->
         <div class="conf-bar-wrap" id="confBarWrap">
           <div class="conf-label">
@@ -66,6 +70,12 @@
         <div class="frase-wrap">
           <div class="frase-label">Palavras detectadas</div>
           <div class="frase-texto" id="fraseTexto">—</div>
+        </div>
+        <div class="voice-status" id="voiceStatus">Voz automática ligada</div>
+        <div class="btn-row voice-row">
+          <button class="btn-mini primary" onclick="falarFrase()">Falar frase</button>
+          <button class="btn-mini" id="btnVozAuto" onclick="alternarVoz()" aria-pressed="true">Voz auto: ligada</button>
+          <button class="btn-mini" onclick="pararVoz()">Parar voz</button>
         </div>
         <div class="btn-row">
           <button class="btn-mini" onclick="removerUltima()">← Apagar última</button>
