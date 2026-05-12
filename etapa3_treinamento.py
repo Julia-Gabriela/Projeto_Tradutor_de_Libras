@@ -19,6 +19,7 @@ RODAR:
 import os
 import pickle
 import re
+import json
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -28,12 +29,12 @@ import matplotlib.pyplot as plt
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, balanced_accuracy_score
 
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
-    LSTM, Dense, Dropout, BatchNormalization,
+    LSTM, Dense, Dropout, BatchNormalization, Bidirectional, Conv1D,
     Input, Multiply, Softmax, GlobalAveragePooling1D
 )
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
@@ -49,6 +50,7 @@ REPORTS_DIR = "reports"
 
 ARQUIVO_CSV = os.path.join(DATA_DIR, "landmarks.csv")
 FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
+QUALIDADE_CSV = os.path.join(DATA_DIR, "qualidade_preprocessamento.csv")
 MAX_FRAMES = 20
 N_FEATURES = 288
 
@@ -60,7 +62,8 @@ MODELO_SAIDA = os.path.join(MODELS_DIR, "modelo_libras.keras")
 ENCODER_SAIDA = os.path.join(MODELS_DIR, "label_encoder.pkl")
 
 # Augmentation mais conservadora
-N_AUGMENTACOES = 15
+N_AUGMENTACOES = 8
+USAR_ESPELHAMENTO = False
 
 METADATA_COLS = ["source_video"]
 
@@ -158,8 +161,8 @@ def augmentar_sequencia(seq):
                                         seq[np.round(indices_orig).astype(int), j])
         seq = seq_novo
 
-    # Espelhamento (útil para sinais simétricos)
-    if np.random.rand() > 0.65:
+    # Espelhamento pode inverter sinais dependentes de mão/lado.
+    if USAR_ESPELHAMENTO and np.random.rand() > 0.65:
         seq = espelhar_sequencia(seq)
 
     seq = aplicar_dropout_landmarks(seq)
@@ -218,24 +221,82 @@ def grupo_video(nome_video):
     return nome.strip().lower()
 
 
+def auditar_qualidade_preprocessamento():
+    if not os.path.exists(QUALIDADE_CSV):
+        print(f"\n  [INFO] {QUALIDADE_CSV} não encontrado. Rode etapa2 para gerar auditoria.")
+        return None
+
+    df_q = pd.read_csv(QUALIDADE_CSV)
+    if df_q.empty:
+        print(f"\n  [AVISO] {QUALIDADE_CSV} está vazio.")
+        return None
+
+    resumo = (
+        df_q.groupby("label")
+        .agg(
+            janelas=("label", "size"),
+            aceitas=("aceita", "sum"),
+            media_ratio_maos=("ratio_maos", "mean"),
+            media_movimento_maos=("movimento_maos", "mean"),
+        )
+        .reset_index()
+    )
+    resumo["taxa_aceitacao"] = resumo["aceitas"] / resumo["janelas"].clip(lower=1)
+    resumo = resumo.sort_values(["taxa_aceitacao", "media_movimento_maos"])
+
+    print("\n  Auditoria do preprocessamento:")
+    for _, row in resumo.iterrows():
+        alertas = []
+        if row["taxa_aceitacao"] < 0.65:
+            alertas.append("muitas janelas descartadas")
+        if row["media_ratio_maos"] < 0.70:
+            alertas.append("pouca mão detectada")
+        if row["media_movimento_maos"] < 0.004:
+            alertas.append("baixo movimento")
+        aviso = f" ({'; '.join(alertas)})" if alertas else ""
+        print(
+            f"    {row['label']}: {int(row['aceitas'])}/{int(row['janelas'])} aceitas | "
+            f"mãos {row['media_ratio_maos']:.2f} | mov {row['media_movimento_maos']:.4f}{aviso}"
+        )
+
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    saida = os.path.join(REPORTS_DIR, "auditoria_preprocessamento.csv")
+    resumo.to_csv(saida, index=False)
+    print(f"  Auditoria resumida salva em: {saida}")
+    return resumo
+
+
 # =========================
 # MODELO COM ATENÇÃO TEMPORAL
 # =========================
 
 def construir_modelo(n_frames, n_features, n_classes):
     inputs = Input(shape=(n_frames, n_features))
-    
-    x = LSTM(96, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))(inputs)
+
+    x = Conv1D(
+        96,
+        kernel_size=3,
+        padding="same",
+        activation="relu",
+        kernel_regularizer=regularizers.l2(8e-4),
+    )(inputs)
+    x = BatchNormalization()(x)
+    x = Dropout(0.25)(x)
+    x = Bidirectional(
+        LSTM(64, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))
+    )(x)
     x = BatchNormalization()(x)
     x = Dropout(0.35)(x)
-    x = LSTM(64, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))(x)
+    x = Bidirectional(
+        LSTM(48, return_sequences=True, kernel_regularizer=regularizers.l2(8e-4))
+    )(x)
     x = BatchNormalization()(x)
-    x = Dropout(0.35)(x)
+    x = Dropout(0.30)(x)
     scores = Dense(1, activation="tanh", name="attention_scores")(x)
     pesos = Softmax(axis=1, name="attention_weights")(scores)
     contexto = Multiply(name="attention_apply")([x, pesos])
     x = GlobalAveragePooling1D(name="attention_context")(contexto)
-    x = Dense(48, activation='relu', kernel_regularizer=regularizers.l2(8e-4))(x)
+    x = Dense(64, activation='relu', kernel_regularizer=regularizers.l2(8e-4))(x)
     x = Dropout(0.3)(x)
     outputs = Dense(n_classes, activation='softmax')(x)
     return Model(inputs=inputs, outputs=outputs)
@@ -258,6 +319,7 @@ if not os.path.exists(ARQUIVO_CSV):
 
 print(f"\nCarregando {ARQUIVO_CSV}...")
 df = pd.read_csv(ARQUIVO_CSV)
+resumo_qualidade = auditar_qualidade_preprocessamento()
 
 if os.path.exists(FEEDBACK_CSV):
     print(f"Carregando feedback coletado em {FEEDBACK_CSV}...")
@@ -337,6 +399,7 @@ X_train_base, X_val, y_train_base, y_val_int = train_test_split(
 print(f"  Validacao real : {X_val.shape[0]} amostras (sem augmentation)")
 
 print(f"\n  Aplicando Data Augmentation ({N_AUGMENTACOES}x)...")
+print(f"  Espelhamento automático: {'SIM' if USAR_ESPELHAMENTO else 'NÃO'}")
 X_train, y_train_int = aplicar_augmentation(X_train_base, y_train_base, N_AUGMENTACOES)
 print(f"  Treino após augmentation: {X_train.shape[0]} amostras")
 
@@ -389,10 +452,16 @@ y_pred = np.argmax(y_pred_prob, axis=1)
 y_true = np.argmax(y_test, axis=1)
 
 acuracia = accuracy_score(y_true, y_pred)
+acuracia_balanceada = balanced_accuracy_score(y_true, y_pred)
+relatorio_dict = classification_report(
+    y_true, y_pred, target_names=le.classes_, zero_division=0, output_dict=True
+)
+relatorio_texto = classification_report(y_true, y_pred, target_names=le.classes_, zero_division=0)
 
 print(f"\n  Acurácia Final no Teste: {acuracia:.2%}")
+print(f"  Acurácia Balanceada   : {acuracia_balanceada:.2%}")
 print("\n  Relatório Completo:")
-print(classification_report(y_true, y_pred, target_names=le.classes_, zero_division=0))
+print(relatorio_texto)
 
 # --- Diagnóstico de confusão ---
 cm = confusion_matrix(y_true, y_pred)
@@ -405,8 +474,7 @@ for i in range(n_classes):
 confusoes.sort(reverse=True)
 for n, real, prev in confusoes[:5]:
     print(f"    '{real}' confundido com '{prev}': {n}x")
-    if confusoes:
-        print("    -> Dica: grave mais videos variados para esses sinais.")
+    print("    -> Dica: grave mais videos variados para esses sinais.")
 
 # --- Calibrar thresholds por classe ---
 print("\n  Calibrando thresholds de confiança por classe...")
@@ -446,9 +514,45 @@ model.save(MODELO_SAIDA)
 with open(ENCODER_SAIDA, "wb") as f:
     pickle.dump(le, f)
 
+metricas_saida = os.path.join(REPORTS_DIR, "metricas_teste.json")
+relatorio_saida = os.path.join(REPORTS_DIR, "relatorio_classificacao.txt")
+confusoes_saida = os.path.join(REPORTS_DIR, "confusoes.csv")
+
+metricas = {
+    "accuracy": float(acuracia),
+    "balanced_accuracy": float(acuracia_balanceada),
+    "classes": le.classes_.tolist(),
+    "samples": {
+        "train_original": int(X_train_raw.shape[0]),
+        "validation": int(X_val.shape[0]),
+        "test": int(X_test.shape[0]),
+        "train_after_augmentation": int(X_train.shape[0]),
+    },
+    "augmentation": {
+        "n_augmentacoes": int(N_AUGMENTACOES),
+        "usar_espelhamento": bool(USAR_ESPELHAMENTO),
+    },
+    "thresholds": thresholds,
+    "classification_report": relatorio_dict,
+}
+
+with open(metricas_saida, "w", encoding="utf-8") as f:
+    json.dump(metricas, f, ensure_ascii=False, indent=2)
+
+with open(relatorio_saida, "w", encoding="utf-8") as f:
+    f.write(f"Acuracia final no teste: {acuracia:.2%}\n")
+    f.write(f"Acuracia balanceada: {acuracia_balanceada:.2%}\n\n")
+    f.write(relatorio_texto)
+
+pd.DataFrame(
+    [{"quantidade": n, "real": real, "previsto": prev} for n, real, prev in confusoes]
+).to_csv(confusoes_saida, index=False)
+
 print(f"\n  Modelo salvo  : {MODELO_SAIDA}")
 print(f"  Encoder salvo : {ENCODER_SAIDA}")
 print(f"  Thresholds    : {thresholds_saida}")
+print(f"  Métricas      : {metricas_saida}")
+print(f"  Relatório     : {relatorio_saida}")
 
 # --- Gráficos ---
 plt.figure(figsize=(8, 5))

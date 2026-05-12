@@ -15,6 +15,7 @@ let ultimaConfFeedback = 0;
 let ultimoFrameRecebidoEm = null;
 let fpsSuavizado = null;
 const FRAMES_PARA_LIMPAR_SINAL = 6;
+const INTERVALO_ENVIO_MS = 65;
 
 async function toggleCamera() {
   if (!cameraAtiva) {
@@ -27,7 +28,7 @@ async function toggleCamera() {
       document.getElementById('btnCamera').textContent = '⏹ Parar Câmera';
       document.getElementById('camStatus').classList.add('active');
       document.getElementById('statusText').textContent = 'Ao vivo';
-      intervalo = setInterval(enviarFrame, 80);
+      intervalo = setInterval(enviarFrame, INTERVALO_ENVIO_MS);
     } catch (e) {
       alert('Não foi possível acessar a câmera: ' + e.message);
     }
@@ -72,6 +73,18 @@ async function resetarBackend() {
   }
 }
 
+async function reiniciarLeitura() {
+  await resetarBackend();
+  limparSinalAtual();
+  ultimoLabelFeedback = null;
+  ultimaConfFeedback = 0;
+  framesSemSinal = 0;
+  document.getElementById('feedbackStatus').textContent = '';
+  document.getElementById('waitingText').textContent = cameraAtiva
+    ? 'Leitura reiniciada. Faça o próximo sinal.'
+    : 'Inicie a câmera para começar';
+}
+
 function capturarFrame() {
   const canvas = document.createElement('canvas');
   canvas.width = video.videoWidth || 320;
@@ -109,11 +122,12 @@ function processarResposta(data) {
 
   // Debug chips
   const maos = data.debug?.hands || 0;
+  const maosCache = data.debug?.hands_cached || false;
   const rosto = data.debug?.face || false;
   const pose = data.debug?.pose || false;
 
   const chipMaos = document.getElementById('chipMaos');
-  chipMaos.textContent = `✋ Mãos: ${maos}`;
+  chipMaos.textContent = `✋ Mãos: ${maos}${maosCache ? ' cache' : ''}`;
   chipMaos.className = 'dbg-chip' + (maos > 0 ? ' on' : '');
 
   const chipRosto = document.getElementById('chipRosto');
@@ -136,6 +150,7 @@ function processarResposta(data) {
 
   // Waiting text
   document.getElementById('waitingText').textContent = data.waiting || '';
+  atualizarTopPredictions(data.top_predictions || []);
 
   // Sinal detectado
   if (data.label) {
@@ -182,6 +197,19 @@ function atualizarPerformance(latenciaMs) {
   document.getElementById('perfPanel').classList.add('visible');
   document.getElementById('fpsValue').textContent = fpsSuavizado === null ? '--' : fpsSuavizado.toFixed(1);
   document.getElementById('latencyValue').textContent = `${Math.round(latenciaMs)} ms`;
+}
+
+function atualizarTopPredictions(predictions) {
+  const el = document.getElementById('topPredictions');
+  if (!predictions.length) {
+    el.innerHTML = '';
+    return;
+  }
+
+  el.innerHTML = predictions.map(item => {
+    const pct = Math.round((item.confidence || 0) * 100);
+    return `<span class="pred-chip"><strong>${item.label}</strong> ${pct}%</span>`;
+  }).join('');
 }
 
 async function enviarFeedback(label) {

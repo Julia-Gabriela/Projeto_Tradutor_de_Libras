@@ -30,12 +30,26 @@ from tqdm import tqdm
 PASTA_DATA = os.path.join("videos", "data")
 DATA_DIR = "data"
 ARQUIVO_SAIDA = os.path.join(DATA_DIR, "landmarks.csv")
+ARQUIVO_QUALIDADE = os.path.join(DATA_DIR, "qualidade_preprocessamento.csv")
 MAX_FRAMES = 20
 LARGURA_PROCESSAMENTO = 480
 USAR_APENAS_VIDEOS_BASE = False  # MUDANÇA: False = usa TODOS os vídeos (mais dados!)
 
-# Qualidade mínima: descarta frames onde as mãos não são detectadas
-MIN_FRAMES_COM_MAOS = 6  # de 20 frames, pelo menos 8 devem ter mãos
+# Qualidade minima: descarta janelas ruins sem punir sinais mais estaticos.
+MIN_FRAMES_COM_MAOS_PADRAO = 8
+MIN_MOVIMENTO_MAOS_PADRAO = 0.0012
+
+# Algumas classes tem movimento menor ou perdem mao com mais facilidade no dataset.
+# Esses ajustes recuperam amostras boas sem reabrir muito espaco para ruido.
+QUALIDADE_POR_SINAL = {
+    "Desconhecido": {"min_maos": 4, "min_movimento": 0.0},
+    "Nome": {"min_maos": 6, "min_movimento": 0.0},
+    "Oi": {"min_maos": 8, "min_movimento": 0.0004},
+    "Banheiro": {"min_maos": 8, "min_movimento": 0.0006},
+    "Obrigado": {"min_maos": 6, "min_movimento": 0.0008},
+}
+
+USAR_MELHOR_JANELA_FALLBACK = True
 
 # Janela deslizante para vídeos longos (gera mais amostras)
 USAR_JANELA_DESLIZANTE = True
@@ -244,27 +258,78 @@ def amostrar_sequencia(todos_frames, inicio, fim, n_frames=MAX_FRAMES):
     indices = np.linspace(0, len(segmento) - 1, n_frames, dtype=int)
     sequencia = [segmento[i][0] for i in indices]
     frames_com_maos = sum(1 for i in indices if segmento[i][1])
-    return sequencia, frames_com_maos
+    movimento_maos = calcular_movimento_maos(sequencia)
+    return sequencia, frames_com_maos, movimento_maos
 
 
-def processar_video(caminho, hands_detector, pose_detector, face_detector):
+def calcular_movimento_maos(sequencia):
+    if len(sequencia) < 2:
+        return 0.0
+    movimentos = []
+    for i in range(1, len(sequencia)):
+        atual = sequencia[i][132:258]
+        anterior = sequencia[i - 1][132:258]
+        if np.any(atual != 0) or np.any(anterior != 0):
+            movimentos.append(float(np.mean(np.abs(atual - anterior))))
+    return float(np.percentile(movimentos, 75)) if movimentos else 0.0
+
+
+def obter_config_qualidade(label):
+    config = QUALIDADE_POR_SINAL.get(label, {})
+    return {
+        "min_maos": config.get("min_maos", MIN_FRAMES_COM_MAOS_PADRAO),
+        "min_movimento": config.get("min_movimento", MIN_MOVIMENTO_MAOS_PADRAO),
+    }
+
+
+def avaliar_janela(label, n_maos, movimento, fallback=False):
+    config = obter_config_qualidade(label)
+    min_maos = config["min_maos"]
+    min_movimento = config["min_movimento"]
+
+    if fallback:
+        min_maos = max(3, min_maos - 2)
+        min_movimento = min_movimento * 0.5
+
+    if n_maos < min_maos:
+        return False, "poucas_maos"
+    if movimento < min_movimento:
+        return False, "baixo_movimento"
+    return True, "ok_fallback" if fallback else "ok"
+
+
+def pontuar_janela(label, n_maos, movimento):
+    config = obter_config_qualidade(label)
+    score_maos = n_maos / max(config["min_maos"], 1)
+    score_movimento = 1.0
+    if config["min_movimento"] > 0:
+        score_movimento = movimento / config["min_movimento"]
+    return min(score_maos, 1.5) + min(score_movimento, 1.5)
+
+
+def processar_video(caminho, label, hands_detector, pose_detector, face_detector):
     """
     Processa um vídeo e retorna uma ou mais amostras.
     Se USAR_JANELA_DESLIZANTE, gera múltiplas amostras por vídeo longo.
     """
     todos_frames = processar_video_completo(caminho, hands_detector, pose_detector, face_detector)
     if todos_frames is None or len(todos_frames) == 0:
-        return []
+        return [], [], 0
 
     total = len(todos_frames)
     amostras = []
+    metricas = []
+    candidatas = []
 
     if not USAR_JANELA_DESLIZANTE or total <= MAX_FRAMES:
         # Modo simples: uma única amostra
         resultado = amostrar_sequencia(todos_frames, 0, total)
         if resultado:
-            seq, n_maos = resultado
-            if n_maos >= MIN_FRAMES_COM_MAOS:
+            seq, n_maos, movimento = resultado
+            aceita, motivo = avaliar_janela(label, n_maos, movimento)
+            metricas.append((0, total, n_maos, movimento, aceita, motivo))
+            candidatas.append((pontuar_janela(label, n_maos, movimento), seq, 0, total, n_maos, movimento))
+            if aceita:
                 amostras.append(seq)
     else:
         # Janela deslizante: gera múltiplas amostras
@@ -272,18 +337,32 @@ def processar_video(caminho, hands_detector, pose_detector, face_detector):
             fim = inicio + MAX_FRAMES
             resultado = amostrar_sequencia(todos_frames, inicio, fim)
             if resultado:
-                seq, n_maos = resultado
-                if n_maos >= MIN_FRAMES_COM_MAOS:
+                seq, n_maos, movimento = resultado
+                aceita, motivo = avaliar_janela(label, n_maos, movimento)
+                metricas.append((inicio, fim, n_maos, movimento, aceita, motivo))
+                candidatas.append((pontuar_janela(label, n_maos, movimento), seq, inicio, fim, n_maos, movimento))
+                if aceita:
                     amostras.append(seq)
 
         # Garante pelo menos uma amostra (do vídeo inteiro)
         if not amostras:
             resultado = amostrar_sequencia(todos_frames, 0, total)
             if resultado:
-                seq, n_maos = resultado
-                amostras.append(seq)
+                seq, n_maos, movimento = resultado
+                aceita, motivo = avaliar_janela(label, n_maos, movimento)
+                metricas.append((0, total, n_maos, movimento, aceita, motivo))
+                candidatas.append((pontuar_janela(label, n_maos, movimento), seq, 0, total, n_maos, movimento))
+                if aceita:
+                    amostras.append(seq)
 
-    return amostras
+        if not amostras and USAR_MELHOR_JANELA_FALLBACK and candidatas:
+            _, seq, inicio, fim, n_maos, movimento = max(candidatas, key=lambda item: item[0])
+            aceita, motivo = avaliar_janela(label, n_maos, movimento, fallback=True)
+            if aceita:
+                amostras.append(seq)
+                metricas.append((inicio, fim, n_maos, movimento, True, motivo))
+
+    return amostras, metricas, total
 
 
 def gerar_colunas():
@@ -346,6 +425,7 @@ def main():
     err_count = 0
     descartados = 0
     amostras_por_sinal = {}
+    qualidade = []
 
     with mp_hands.Hands(
         static_image_mode=False, max_num_hands=2, model_complexity=1,
@@ -362,11 +442,30 @@ def main():
             label = extrair_label(nome)
             caminho = os.path.join(PASTA_DATA, nome)
 
-            amostras = processar_video(caminho, hands_detector, pose_detector, face_detector)
+            amostras, metricas, total_frames = processar_video(
+                caminho, label, hands_detector, pose_detector, face_detector
+            )
 
             if not amostras:
                 err_count += 1
                 descartados += 1
+
+            for idx_metrica, (inicio, fim, n_maos, movimento, aceita, motivo) in enumerate(metricas):
+                qualidade.append({
+                    "source_video": nome,
+                    "label": label,
+                    "total_frames_video": total_frames,
+                    "janela_inicio": inicio,
+                    "janela_fim": fim,
+                    "frames_com_maos": n_maos,
+                    "ratio_maos": round(n_maos / MAX_FRAMES, 4),
+                    "movimento_maos": round(movimento, 6),
+                    "aceita": aceita,
+                    "motivo": motivo,
+                    "indice_amostra": idx_metrica,
+                })
+
+            if not amostras:
                 continue
 
             for seq in amostras:
@@ -397,6 +496,7 @@ def main():
 
     os.makedirs(DATA_DIR, exist_ok=True)
     df.to_csv(ARQUIVO_SAIDA, index=False)
+    pd.DataFrame(qualidade).to_csv(ARQUIVO_QUALIDADE, index=False)
 
     print("\n" + "=" * 60)
     print("  CONCLUÍDO!")
@@ -415,6 +515,7 @@ def main():
         print("    Adicione mais vídeos para esses sinais para melhorar a acurácia.")
 
     print(f"\n  CSV salvo em: {ARQUIVO_SAIDA}")
+    print(f"  Qualidade salva em: {ARQUIVO_QUALIDADE}")
     print("\n  Próximo passo:")
     print("  python etapa3_treinamento.py")
 

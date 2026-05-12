@@ -47,6 +47,7 @@
         <div class="card-title"><span class="dot"></span>Sinal Detectado</div>
         <div class="sinal-label" id="sinaLabel">—</div>
         <div class="waiting-text" id="waitingText">Inicie a câmera para começar</div>
+        <div class="top-predictions" id="topPredictions"></div>
         <div class="btn-row">
           <button class="btn-mini" onclick="enviarFeedbackAcerto()">Acertou</button>
           <select class="btn-mini" id="feedbackLabel">
@@ -56,6 +57,7 @@
           </select>
           <button class="btn-mini" onclick="enviarFeedbackCorrecao()">Corrigir</button>
         </div>
+        <button class="btn-limpar leitura-reset" onclick="reiniciarLeitura()">Reiniciar leitura</button>
         <div class="waiting-text" id="feedbackStatus"></div>
         <div class="debug-row">
           <span class="dbg-chip" id="chipMaos">✋ Mãos: 0</span>

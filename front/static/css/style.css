@@ -110,6 +110,16 @@ h1 span { color:var(--accent); }
   100% { transform:scale(1);   color:var(--accent); }
 }
 .waiting-text { font-size:.8rem; color:var(--muted); margin-top:.5rem; min-height:1.2rem; }
+.top-predictions {
+  display:flex; gap:.35rem; justify-content:center; flex-wrap:wrap;
+  min-height:1.5rem; margin-top:.5rem;
+}
+.pred-chip {
+  font-size:.64rem; padding:.22rem .45rem; border-radius:999px;
+  background:rgba(255,255,255,.04); border:1px solid var(--border);
+  color:var(--muted);
+}
+.pred-chip strong { color:var(--text); font-weight:700; }
 
 /* Debug / sensores */
 .debug-row { display:flex; gap:.5rem; margin-top:.75rem; flex-wrap:wrap; justify-content:center; }
@@ -142,6 +152,11 @@ h1 span { color:var(--accent); }
   font-size:.75rem; cursor:pointer; transition:.2s;
 }
 .btn-limpar:hover { border-color:var(--danger); color:var(--danger); }
+.leitura-reset {
+  margin-top:.5rem;
+  border-color:rgba(0,229,255,.18);
+}
+.leitura-reset:hover { border-color:var(--accent); color:var(--accent); }
 
 /* Sinais disponíveis */
 .sinais-grid { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.5rem; }

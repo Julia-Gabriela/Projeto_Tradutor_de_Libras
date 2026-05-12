@@ -48,7 +48,7 @@ app = Flask(
 # =========================
 MAX_FRAMES = 20
 N_FEATURES = 288
-LARGURA_PROCESSAMENTO = 416
+LARGURA_PROCESSAMENTO = 448
 FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
 DATA_DIR = "data"
 MODELS_DIR = "models"
@@ -59,11 +59,13 @@ THRESHOLDS_PATH = os.path.join(MODELS_DIR, "thresholds.pkl")
 # --- Parâmetros de detecção ---
 CONFIANCA_MINIMA_GLOBAL = 0.75   # Limiar padrão (sobrescrito pelos thresholds por classe)
 MARGEM_MINIMA = 0.35           # Diferença mínima entre 1º e 2º lugar
-VOTOS_NECESSARIOS = 2            # De 3 predições, quantas precisam concordar
+VOTOS_NECESSARIOS = 3            # De 3 predições, quantas precisam concordar
 JANELA_PREDICOES = 3             # Tamanho da janela de votação
 DEBOUNCE_FRAMES = 10             # Frames para esperar antes de aceitar o mesmo sinal de novo
 MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
 FRAMES_SEM_MAOS_TOLERANCIA = 4  # Evita resetar tudo quando o MediaPipe pisca por poucos frames
+FRAMES_CACHE_MAOS = 3
+FRAMES_CACHE_POSE_ROSTO = 8
 MIN_FRAMES_VALIDOS_PREDICAO = 8
 CONFIANCA_REJEICAO_PROXIMA = 0.35
 MARGEM_REJEICAO_PROXIMA = 0.18
@@ -71,8 +73,20 @@ FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
 DEBUG_PREDICOES = False
 
 # Overrides manuais opcionais. Mantenha vazio para usar a calibragem do treino.
-THRESHOLDS_MANUAIS = {}
-MARGENS_MANUAIS = {}
+THRESHOLDS_MANUAIS = {
+    "Banheiro": 0.72,
+    "Casa": 0.80,
+    "Livro": 0.70,
+    "Nome": 0.82,
+    "Oi": 0.78,
+}
+MARGENS_MANUAIS = {
+    "Banheiro": 0.40,
+    "Casa": 0.40,
+    "Livro": 0.42,
+    "Nome": 0.42,
+    "Oi": 0.40,
+}
 VOTOS_MANUAIS = {}
 LABELS_REJEICAO = {"Desconhecido", "Desconhecida", "Neutro", "Fundo", "Nada", "Outro"}
 
@@ -93,11 +107,17 @@ pose_face_lock = threading.Lock()
 
 # Cache de pose/rosto (processados a cada N frames)
 visual_frame_count = 0
-PROCESSAR_POSE_ROSTO_A_CADA = 3
+PROCESSAR_POSE_ROSTO_A_CADA = 4
 ultimo_pose_features = [0.0] * (33 * 4)
 ultimo_face_features = [0.0] * (len(FACE_INDICES) * 3)
 ultimo_visual_pose = []
 ultimo_visual_face = []
+ultimo_left_hand_features = [0.0] * (21 * 3)
+ultimo_right_hand_features = [0.0] * (21 * 3)
+ultimo_visual_hands = []
+frames_sem_maos_cache = FRAMES_CACHE_MAOS + 1
+frames_sem_pose_cache = FRAMES_CACHE_POSE_ROSTO + 1
+frames_sem_face_cache = FRAMES_CACHE_POSE_ROSTO + 1
 
 # =========================
 # CARREGAR MODELO
@@ -163,15 +183,15 @@ mp_face_mesh = mp.solutions.face_mesh
 
 hands_detector = mp_hands.Hands(
     static_image_mode=False, max_num_hands=2, model_complexity=1,
-    min_detection_confidence=0.55, min_tracking_confidence=0.55
+    min_detection_confidence=0.40, min_tracking_confidence=0.40
 )
 pose_detector = mp_pose.Pose(
     static_image_mode=False, model_complexity=1, smooth_landmarks=True,
-    enable_segmentation=False, min_detection_confidence=0.55, min_tracking_confidence=0.55
+    enable_segmentation=False, min_detection_confidence=0.45, min_tracking_confidence=0.45
 )
 face_detector = mp_face_mesh.FaceMesh(
     static_image_mode=False, max_num_faces=1, refine_landmarks=False,
-    min_detection_confidence=0.55, min_tracking_confidence=0.55
+    min_detection_confidence=0.45, min_tracking_confidence=0.45
 )
 
 
@@ -240,6 +260,8 @@ def normalizar_features(features):
 def extrair_features_e_visual(frame):
     global visual_frame_count, ultimo_pose_features, ultimo_face_features
     global ultimo_visual_pose, ultimo_visual_face
+    global ultimo_left_hand_features, ultimo_right_hand_features, ultimo_visual_hands
+    global frames_sem_maos_cache, frames_sem_pose_cache, frames_sem_face_cache
 
     if LARGURA_PROCESSAMENTO and frame.shape[1] > LARGURA_PROCESSAMENTO:
         escala = LARGURA_PROCESSAMENTO / frame.shape[1]
@@ -279,6 +301,20 @@ def extrair_features_e_visual(frame):
         if len(maos_detectadas) >= 2:
             right_hand = maos_detectadas[1][1]
         visual["hands"] = [mao[2] for mao in maos_detectadas]
+        ultimo_left_hand_features = left_hand.copy()
+        ultimo_right_hand_features = right_hand.copy()
+        ultimo_visual_hands = [mao[2] for mao in maos_detectadas]
+        frames_sem_maos_cache = 0
+    elif frames_sem_maos_cache < FRAMES_CACHE_MAOS:
+        left_hand = ultimo_left_hand_features.copy()
+        right_hand = ultimo_right_hand_features.copy()
+        visual["hands"] = ultimo_visual_hands
+        frames_sem_maos_cache += 1
+    else:
+        ultimo_left_hand_features = [0.0] * (21 * 3)
+        ultimo_right_hand_features = [0.0] * (21 * 3)
+        ultimo_visual_hands = []
+        frames_sem_maos_cache += 1
 
     visual_frame_count += 1
     if visual_frame_count % PROCESSAR_POSE_ROSTO_A_CADA == 0:
@@ -298,10 +334,13 @@ def extrair_features_e_visual(frame):
                      pose_result.pose_landmarks.landmark[i].y]
                     for i in pose_indices
                 ]
+                frames_sem_pose_cache = 0
             else:
-                pose = [0.0] * (33 * 4)
-                ultimo_pose_features = pose.copy()
-                ultimo_visual_pose = []
+                frames_sem_pose_cache += 1
+                if frames_sem_pose_cache > FRAMES_CACHE_POSE_ROSTO:
+                    pose = [0.0] * (33 * 4)
+                    ultimo_pose_features = pose.copy()
+                    ultimo_visual_pose = []
 
             if face_result.multi_face_landmarks:
                 face_landmarks = face_result.multi_face_landmarks[0]
@@ -311,10 +350,13 @@ def extrair_features_e_visual(frame):
                     face.extend([lm.x, lm.y, lm.z])
                 ultimo_face_features = face.copy()
                 ultimo_visual_face = [[face_landmarks.landmark[i].x, face_landmarks.landmark[i].y] for i in FACE_INDICES]
+                frames_sem_face_cache = 0
             else:
-                face = [0.0] * (len(FACE_INDICES) * 3)
-                ultimo_face_features = face.copy()
-                ultimo_visual_face = []
+                frames_sem_face_cache += 1
+                if frames_sem_face_cache > FRAMES_CACHE_POSE_ROSTO:
+                    face = [0.0] * (len(FACE_INDICES) * 3)
+                    ultimo_face_features = face.copy()
+                    ultimo_visual_face = []
 
             visual["pose"] = ultimo_visual_pose
             visual["face"] = ultimo_visual_face
@@ -322,7 +364,12 @@ def extrair_features_e_visual(frame):
             print("[ERRO VISUAL POSE/ROSTO]", e)
 
     features = normalizar_features(np.array(pose + left_hand + right_hand + face, dtype=np.float32))
-    debug = {"hands": len(visual["hands"]), "face": bool(visual["face"]), "pose": bool(visual["pose"])}
+    debug = {
+        "hands": len(visual["hands"]),
+        "face": bool(visual["face"]),
+        "pose": bool(visual["pose"]),
+        "hands_cached": bool(visual["hands"]) and not bool(result.multi_hand_landmarks),
+    }
     return features, visual, debug
 
 
@@ -417,6 +464,9 @@ def salvar_feedback(label):
 def resetar_estado_inferencia():
     global ultimo_features, debounce_counter, frames_sem_maos, ultimo_label_emitido
     global ultima_seq_feedback, ultimo_label_feedback, ultima_conf_feedback
+    global ultimo_left_hand_features, ultimo_right_hand_features, ultimo_visual_hands
+    global ultimo_pose_features, ultimo_face_features, ultimo_visual_pose, ultimo_visual_face
+    global frames_sem_maos_cache, frames_sem_pose_cache, frames_sem_face_cache
     frame_buffer.clear()
     historico_predicoes.clear()
     ultimo_features = None
@@ -426,6 +476,16 @@ def resetar_estado_inferencia():
     ultima_seq_feedback = None
     ultimo_label_feedback = None
     ultima_conf_feedback = 0.0
+    ultimo_left_hand_features = [0.0] * (21 * 3)
+    ultimo_right_hand_features = [0.0] * (21 * 3)
+    ultimo_visual_hands = []
+    ultimo_pose_features = [0.0] * (33 * 4)
+    ultimo_face_features = [0.0] * (len(FACE_INDICES) * 3)
+    ultimo_visual_pose = []
+    ultimo_visual_face = []
+    frames_sem_maos_cache = FRAMES_CACHE_MAOS + 1
+    frames_sem_pose_cache = FRAMES_CACHE_POSE_ROSTO + 1
+    frames_sem_face_cache = FRAMES_CACHE_POSE_ROSTO + 1
 
 
 @app.route("/")
@@ -553,6 +613,10 @@ def predict():
     ordem_probs = np.argsort(probs)[::-1]
     segunda_conf = float(probs[ordem_probs[1]]) if len(ordem_probs) > 1 else 0.0
     margem = conf - segunda_conf
+    top_predictions = [
+        {"label": labels[int(i)], "confidence": float(probs[int(i)])}
+        for i in ordem_probs[:3]
+    ]
 
     historico_predicoes.append((probs, conf, margem))
 
@@ -611,6 +675,10 @@ def predict():
             waiting_msg = "Gesto fora do vocabulário."
         elif label_voto == ultimo_label_emitido:
             waiting_msg = f"{label_voto} ja foi registrado. Troque de sinal ou abaixe as maos."
+        elif votos < votos_necessarios:
+            waiting_msg = f"Estabilizando {label_voto}... mantenha o sinal por mais um instante."
+        elif conf_voto < threshold or margem_voto < margem_ajustada:
+            waiting_msg = f"Baixa certeza em {label_voto}. Ajuste o enquadramento."
         else:
             waiting_msg += f" | voto {label_voto} {conf_voto * 100:.0f}%"
     if debounce_counter > 0 and not label_final:
@@ -621,6 +689,7 @@ def predict():
         "confidence": conf_voto if resultado_voto else conf,
         "live_label": label_previsto,
         "live_conf": conf,
+        "top_predictions": top_predictions,
         "visual": visual,
         "debug": debug,
         "waiting": waiting_msg

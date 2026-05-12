@@ -1,0 +1,16 @@
+Acuracia final no teste: 66.41%
+Acuracia balanceada: 72.38%
+
+              precision    recall  f1-score   support
+
+    Banheiro       0.22      0.88      0.35         8
+        Casa       0.93      0.73      0.81        51
+Desconhecido       0.32      0.89      0.47         9
+       Livro       0.69      0.54      0.61        46
+        Nome       0.71      0.68      0.69        37
+    Obrigado       0.91      0.74      0.82        27
+          Oi       0.72      0.62      0.67        81
+
+    accuracy                           0.66       259
+   macro avg       0.64      0.72      0.63       259
+weighted avg       0.75      0.66      0.69       259
