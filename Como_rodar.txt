@@ -1,79 +1,188 @@
-Para rodar aprimeira vez e necessario estar no python 3.11
+============================================================
+COMO RODAR O PROJETO - TRADUTOR DE LIBRAS
+============================================================
 
-Para baixar por terminal: winget install Python.Python.3.11
+Este guia mostra o passo a passo para preparar o ambiente,
+validar os videos, treinar o modelo e abrir o sistema.
 
-Depois roda : Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-1. Apagar o ambiente virtual antigo
 
-No PowerShell:
+1. REQUISITO PRINCIPAL
+------------------------------------------------------------
 
-deactivate
+Use Python 3.11.
 
-Depois:
+Para instalar pelo terminal:
 
-rm -r -fo .venv
-🐍 2. Criar novo ambiente com Python 3.11
-py -3.11 -m venv .venv
+    winget install Python.Python.3.11
+
+
+2. ABRIR O POWERSHELL NA PASTA DO PROJETO
+------------------------------------------------------------
+
+Entre na pasta:
+
+    D:\Faculdade\6_semestre\IA\Projeto_Tradutor_de_Libras
+
+Se o PowerShell bloquear scripts, rode:
+
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+
+3. CRIAR E ATIVAR O AMBIENTE VIRTUAL
+------------------------------------------------------------
+
+Criar o ambiente:
+
+    py -3.11 -m venv .venv
 
 Ativar:
 
-.venv\Scripts\activate
-📦 3. Atualizar pip
-python -m pip install --upgrade pip
-📚 4. Instalar dependências
+    .\.venv\Scripts\activate
 
-Se tiver requirements.txt:
+Atualizar o pip:
 
-pip install -r requirements.txt
+    python -m pip install --upgrade pip
 
-Se não:
+Instalar as dependencias:
 
-pip install mediapipe==0.10.9 opencv-python pandas numpy tqdm scikit-learn matplotlib flask tensorflow
-🧪 5. Testar se o MediaPipe está correto
-python -c "import mediapipe as mp; print(mp.__version__); print(hasattr(mp, 'solutions'))"
+    pip install -r requirements.txt
 
-Deve retornar:
 
-0.10.9
-True
-🎥 6. Organizar os vídeos
+4. TESTAR O MEDIAPIPE
+------------------------------------------------------------
 
-Coloque os vídeos em:
+Rode:
 
-videos/data/
+    python -c "import mediapipe as mp; print(mp.__version__); print(hasattr(mp, 'solutions'))"
 
-Exemplo:
+O esperado e aparecer algo parecido com:
 
-Oi_Articulador1.mp4
-Ajudar_Articulador1.mp4
-Obrigado_Articulador1.mp4
-Casa_Articulador1.mp4
-Nada_Articulador1.mp4
-⚙️ 7. Rodar o pré-processamento
-python etapa2_preprocessamento.py
+    0.10.9
+    True
 
-Vai gerar:
 
-data/landmarks.csv
-🧠 8. Treinar o modelo
-python etapa3_treinamento.py
+5. ORGANIZAR OS VIDEOS
+------------------------------------------------------------
 
-Vai gerar:
+Coloque todos os videos nesta pasta:
 
-models/modelo_libras.keras
-models/label_encoder.pkl
-models/thresholds.pkl
-reports/resultado_treinamento.png
-reports/resultado_loss.png
-reports/matriz_confusao.png
-🚀 9. Rodar o sistema
-python app.py
-🌐 10. Abrir no navegador
-http://localhost:5000
-⚠️ 11. Regra importante
+    videos\data\
 
-Sempre que adicionar novos vídeos:
+O nome dos arquivos precisa seguir este padrao:
 
-python etapa2_preprocessamento.py
-python etapa3_treinamento.py
-python app.py
+    NomeDoSinal_Articulador1.mp4
+    NomeDoSinal_Articulador2.mp4
+    NomeDoSinal_Articulador3.mp4
+
+Exemplos:
+
+    Oi_Articulador1.mp4
+    Casa_Articulador2.mp4
+    Obrigado_Articulador3.mp4
+    Bebida_Articulador1.mp4
+    Sortudo_Articulador1.mp4
+
+
+6. VALIDAR A BASE DE VIDEOS
+------------------------------------------------------------
+
+Antes de processar os videos, rode:
+
+    python validar_dataset.py
+
+Esse script mostra:
+
+    - quantidade de videos por sinal
+    - videos fora do padrao
+    - videos que nao abrem
+    - sinais com poucos videos
+
+Se aparecer apenas aviso de poucos videos, ainda da para rodar.
+Se aparecer erro de video quebrado ou fora do padrao, corrija antes.
+
+
+7. RODAR O PRE-PROCESSAMENTO
+------------------------------------------------------------
+
+Rode:
+
+    python etapa2_preprocessamento.py
+
+Essa etapa gera:
+
+    data\landmarks.csv
+    data\qualidade_preprocessamento.csv
+
+
+8. TREINAR O MODELO
+------------------------------------------------------------
+
+Rode:
+
+    python etapa3_treinamento.py
+
+Essa etapa gera:
+
+    models\modelo_libras.keras
+    models\label_encoder.pkl
+    models\thresholds.pkl
+
+E tambem salva relatorios em:
+
+    reports\
+
+
+9. RODAR O SISTEMA
+------------------------------------------------------------
+
+Depois que o modelo estiver treinado, rode:
+
+    python app.py
+
+Abra no navegador:
+
+    http://localhost:5000
+
+
+10. QUANDO ADICIONAR NOVOS VIDEOS
+------------------------------------------------------------
+
+Sempre que colocar novos videos em videos\data\, rode novamente:
+
+    python validar_dataset.py
+    python etapa2_preprocessamento.py
+    python etapa3_treinamento.py
+    python app.py
+
+
+11. SE DER ERRO NO AMBIENTE VIRTUAL
+------------------------------------------------------------
+
+Se precisar recriar o ambiente do zero:
+
+    deactivate
+    Remove-Item -Recurse -Force .venv
+    py -3.11 -m venv .venv
+    .\.venv\Scripts\activate
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+
+
+12. RESUMO RAPIDO
+------------------------------------------------------------
+
+Para rodar depois que o ambiente ja estiver pronto:
+
+    .\.venv\Scripts\activate
+    python validar_dataset.py
+    python etapa2_preprocessamento.py
+    python etapa3_treinamento.py
+    python app.py
+
+Depois abra:
+
+    http://localhost:5000
+
+============================================================
+FIM
+============================================================

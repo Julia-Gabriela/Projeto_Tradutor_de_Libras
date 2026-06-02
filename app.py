@@ -1,23 +1,4 @@
-"""
-=============================================================
-APP — Tradutor de Libras com IA (MELHORADO)
-MediaPipe Hands + Flask + LSTM com Atenção
-
-MELHORIAS:
-  - Buffer com reset inteligente (não mistura sinais)
-  - Sistema de votação por maioria ponderada
-  - Debounce: evita repetir o mesmo sinal imediatamente
-  - Thresholds calibrados por classe (mais justos)
-  - UI com histórico de sinais traduzidos
-  - Indicador visual de confiança em tempo real
-=============================================================
-
-RODAR:
-  python app.py
-
-ACESSAR:
-  http://localhost:5000
-"""
+"""Aplicacao Flask para reconhecimento em tempo real."""
 
 import os
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
@@ -43,9 +24,6 @@ app = Flask(
     static_folder=os.path.join("front", "static"),
 )
 
-# =========================
-# CONFIGURAÇÕES
-# =========================
 MAX_FRAMES = 20
 N_FEATURES = 288
 LARGURA_PROCESSAMENTO = 448
@@ -56,14 +34,13 @@ MODEL_PATH = os.path.join(MODELS_DIR, "modelo_libras.keras")
 ENCODER_PATH = os.path.join(MODELS_DIR, "label_encoder.pkl")
 THRESHOLDS_PATH = os.path.join(MODELS_DIR, "thresholds.pkl")
 
-# --- Parâmetros de detecção ---
-CONFIANCA_MINIMA_GLOBAL = 0.75   # Limiar padrão (sobrescrito pelos thresholds por classe)
-MARGEM_MINIMA = 0.35           # Diferença mínima entre 1º e 2º lugar
-VOTOS_NECESSARIOS = 3            # De 3 predições, quantas precisam concordar
-JANELA_PREDICOES = 3             # Tamanho da janela de votação
-DEBOUNCE_FRAMES = 10             # Frames para esperar antes de aceitar o mesmo sinal de novo
-MOVIMENTO_MINIMO = 0.0006       # Movimento mínimo para considerar que há sinal
-FRAMES_SEM_MAOS_TOLERANCIA = 4  # Evita resetar tudo quando o MediaPipe pisca por poucos frames
+CONFIANCA_MINIMA_GLOBAL = 0.75
+MARGEM_MINIMA = 0.35
+VOTOS_NECESSARIOS = 3
+JANELA_PREDICOES = 3
+DEBOUNCE_FRAMES = 10
+MOVIMENTO_MINIMO = 0.0006
+FRAMES_SEM_MAOS_TOLERANCIA = 4
 FRAMES_CACHE_MAOS = 3
 FRAMES_CACHE_POSE_ROSTO = 8
 MIN_FRAMES_VALIDOS_PREDICAO = 8
@@ -72,7 +49,6 @@ MARGEM_REJEICAO_PROXIMA = 0.18
 FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
 DEBUG_PREDICOES = False
 
-# Overrides manuais opcionais. Mantenha vazio para usar a calibragem do treino.
 THRESHOLDS_MANUAIS = {
     "Banheiro": 0.72,
     "Casa": 0.80,
@@ -90,7 +66,6 @@ MARGENS_MANUAIS = {
 VOTOS_MANUAIS = {}
 LABELS_REJEICAO = {"Desconhecido", "Desconhecida", "Neutro", "Fundo", "Nada", "Outro"}
 
-# Estado global
 frame_buffer = deque(maxlen=MAX_FRAMES)
 historico_predicoes = deque(maxlen=JANELA_PREDICOES)
 ultimo_features = None
@@ -101,11 +76,9 @@ ultima_seq_feedback = None
 ultimo_label_feedback = None
 ultima_conf_feedback = 0.0
 
-# Locks
 hands_lock = threading.Lock()
 pose_face_lock = threading.Lock()
 
-# Cache de pose/rosto (processados a cada N frames)
 visual_frame_count = 0
 PROCESSAR_POSE_ROSTO_A_CADA = 4
 ultimo_pose_features = [0.0] * (33 * 4)
@@ -119,9 +92,6 @@ frames_sem_maos_cache = FRAMES_CACHE_MAOS + 1
 frames_sem_pose_cache = FRAMES_CACHE_POSE_ROSTO + 1
 frames_sem_face_cache = FRAMES_CACHE_POSE_ROSTO + 1
 
-# =========================
-# CARREGAR MODELO
-# =========================
 print("Carregando modelo...")
 inicio_modelo = time.perf_counter()
 model = tf.keras.models.load_model(MODEL_PATH)
@@ -136,14 +106,13 @@ inicio_warmup = time.perf_counter()
 model.predict(np.zeros((1, MAX_FRAMES, N_FEATURES), dtype=np.float32), verbose=0)
 print(f"Modelo aquecido em {time.perf_counter() - inicio_warmup:.2f}s.")
 
-# Carrega thresholds calibrados (se existir)
 thresholds_por_classe = {}
 if os.path.exists(THRESHOLDS_PATH):
     with open(THRESHOLDS_PATH, "rb") as f:
         thresholds_por_classe = pickle.load(f)
     print(f"Thresholds calibrados carregados: {thresholds_por_classe}")
 else:
-    print("thresholds.pkl não encontrado. Usando limiar global.")
+    print("thresholds.pkl nao encontrado. Usando limiar global.")
 
 def chave_label(label):
     return unicodedata.normalize("NFKD", str(label)).encode("ascii", "ignore").decode("ascii")
@@ -174,9 +143,6 @@ def deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, marg
         margem_voto <= MARGEM_REJEICAO_PROXIMA
     )
 
-# =========================
-# MEDIAPIPE
-# =========================
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
 mp_face_mesh = mp.solutions.face_mesh
@@ -195,10 +161,6 @@ face_detector = mp_face_mesh.FaceMesh(
 )
 
 
-
-# =========================
-# FUNÇÕES DE PROCESSAMENTO
-# =========================
 
 def normalizar_features(features):
     features = features.astype(np.float32).copy()
@@ -396,14 +358,10 @@ def calcular_movimento_sequencia(buffer):
 
 
 def votar_predicao(historico_pred):
-    """
-    Votação ponderada: predicões mais recentes têm mais peso.
-    Retorna (label, confiança_media, votos) ou None.
-    """
+    """Media ponderada das ultimas predicoes."""
     if len(historico_pred) < JANELA_PREDICOES:
         return None
 
-    # Peso crescente para predicções mais recentes
     pesos = np.linspace(0.5, 1.0, len(historico_pred))
     probs_hist = np.array([p[0] for p in historico_pred], dtype=np.float32)
     probs_media = np.average(probs_hist, axis=0, weights=pesos)
@@ -457,9 +415,6 @@ def salvar_feedback(label):
     return True, "Exemplo salvo."
 
 
-# =========================
-# ROTAS
-# =========================
 
 def resetar_estado_inferencia():
     global ultimo_features, debounce_counter, frames_sem_maos, ultimo_label_emitido
@@ -549,11 +504,10 @@ def predict():
         return jsonify({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Erro ao ler frame."})
 
     if frame is None:
-        return jsonify({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Frame inválido."})
+        return jsonify({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Frame invalido."})
 
     features, visual, debug = extrair_features_e_visual(frame)
 
-    # Sem mãos → reseta tudo
     if debug["hands"] <= 0:
         frames_sem_maos += 1
         debounce_counter = max(0, debounce_counter - 1)
@@ -566,14 +520,13 @@ def predict():
         ultimo_features = None
         ultimo_label_emitido = None
         return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
-                        "waiting": "Mostre as mãos para a câmera."})
+                        "waiting": "Mostre as maos para a camera."})
 
     frames_sem_maos = 0
 
     movimento = calcular_movimento(features, ultimo_features)
     ultimo_features = features.copy()
 
-    # Se houver muito movimento (troca de sinal), reseta o buffer
     if movimento > 0.03 and len(frame_buffer) > 5:
         frame_buffer.clear()
         historico_predicoes.clear()
@@ -592,15 +545,13 @@ def predict():
             "confidence": 0.0,
             "visual": visual,
             "debug": debug,
-            "waiting": "Ajuste as mãos na câmera..."
+            "waiting": "Ajuste as maos na camera..."
         })
 
-    # Aguarda buffer cheio
     if len(frame_buffer) < MAX_FRAMES:
         return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
                         "waiting": f"Lendo sinal... {len(frame_buffer)}/{MAX_FRAMES}"})
 
-    # Faz predição
     X = np.array(list(frame_buffer), dtype=np.float32).reshape(1, MAX_FRAMES, N_FEATURES)
     probs = model.predict(X, verbose=0)[0]
 
@@ -626,11 +577,9 @@ def predict():
             f"Mov: {movimento:.4f} | Seq: {movimento_seq:.4f}"
         )
 
-    # Debounce: desconta contador a cada frame
     if debounce_counter > 0:
         debounce_counter -= 1
 
-    # Votação ponderada
     resultado_voto = votar_predicao(list(historico_predicoes))
     label_final = None
     conf_voto = conf  # fallback seguro
@@ -660,7 +609,6 @@ def predict():
             label_final = label_voto
             ultimo_label_emitido = label_voto
             debounce_counter = DEBOUNCE_FRAMES
-            # Reseta buffer parcialmente para permitir próximo sinal
             for _ in range(MAX_FRAMES // 2):
                 if frame_buffer:
                     frame_buffer.popleft()
@@ -672,7 +620,7 @@ def predict():
     )
     if resultado_voto and not label_final:
         if deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, margem_voto):
-            waiting_msg = "Gesto fora do vocabulário."
+            waiting_msg = "Gesto fora do vocabulario."
         elif label_voto == ultimo_label_emitido:
             waiting_msg = f"{label_voto} ja foi registrado. Troque de sinal ou abaixe as maos."
         elif votos < votos_necessarios:
@@ -682,7 +630,7 @@ def predict():
         else:
             waiting_msg += f" | voto {label_voto} {conf_voto * 100:.0f}%"
     if debounce_counter > 0 and not label_final:
-        waiting_msg = f"Aguardando próximo sinal... ({debounce_counter})"
+        waiting_msg = f"Aguardando proximo sinal... ({debounce_counter})"
 
     return jsonify({
         "label": label_final,

@@ -1,20 +1,4 @@
-"""
-=============================================================
-ETAPA 3 — TREINAMENTO DO MODELO (MELHORADO)
-Compatível com landmarks.csv gerado pela etapa2_preprocessamento.py.
-
-MELHORIAS:
-  - Modelo com atenção temporal (Attention) entre as camadas LSTM
-  - Dropout adaptativo e L2 regularization para evitar overfitting
-  - Augmentation mais inteligente: menos agressiva, mais variada
-  - Threshold de confiança calibrado por classe
-  - Salva histórico completo para análise
-  - Relatório de classes problemáticas (confusão)
-=============================================================
-
-RODAR:
-  python etapa3_treinamento.py
-"""
+"""Treina o classificador usando data/landmarks.csv."""
 
 import os
 import pickle
@@ -41,9 +25,6 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLRO
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras import regularizers
 
-# =========================
-# CONFIGURAÇÕES
-# =========================
 DATA_DIR = "data"
 MODELS_DIR = "models"
 REPORTS_DIR = "reports"
@@ -61,19 +42,13 @@ TEST_SIZE = 0.25
 MODELO_SAIDA = os.path.join(MODELS_DIR, "modelo_libras.keras")
 ENCODER_SAIDA = os.path.join(MODELS_DIR, "label_encoder.pkl")
 
-# Augmentation mais conservadora
 N_AUGMENTACOES = 8
 USAR_ESPELHAMENTO = False
 
 METADATA_COLS = ["source_video"]
 
 
-# =========================
-# AUGMENTATION MELHORADA
-# =========================
-
 def mascara_coordenadas(seq):
-    """Marca apenas coordenadas reais; preserva zeros e visibility da pose."""
     mask = np.zeros(seq.shape, dtype=bool)
     pose = seq[:, :132].reshape(seq.shape[0], 33, 4)
     left_hand = seq[:, 132:195].reshape(seq.shape[0], 21, 3)
@@ -109,7 +84,6 @@ def deslocar_eixos(seq, dx=0.0, dy=0.0, dz=0.0):
 
 
 def aplicar_dropout_landmarks(seq):
-    """Simula pequenas falhas de rastreamento sem criar landmarks falsos."""
     seq = seq.copy()
     for inicio, fim in ((132, 195), (195, 258)):
         if np.random.rand() < 0.18:
@@ -125,30 +99,22 @@ def aplicar_dropout_landmarks(seq):
     return seq
 
 def augmentar_sequencia(seq):
-    """
-    Augmentation conservadora e realista.
-    Só aplica transformações que podem acontecer na vida real.
-    """
     seq = seq.copy().astype(np.float32)
     coord_mask = mascara_coordenadas(seq)
 
-    # Ruído muito leve (simula tremor natural)
     if np.random.rand() > 0.4:
         intensidade = np.random.uniform(0.002, 0.006)
         ruido = np.random.normal(0, intensidade, seq.shape).astype(np.float32)
         seq[coord_mask] += ruido[coord_mask]
 
-    # Escala leve (simula distância variável da câmera)
     if np.random.rand() > 0.4:
         escala = np.random.uniform(0.92, 1.08)
         seq[coord_mask] *= escala
 
-    # Deslocamento espacial leve (simula posicionamento diferente)
     if np.random.rand() > 0.5:
         dx, dy, dz = np.random.normal(0, [0.025, 0.025, 0.01])
         seq = deslocar_eixos(seq, dx, dy, dz)
 
-    # Variação de velocidade: estica ou comprime o tempo
     if np.random.rand() > 0.5:
         fator = np.random.uniform(0.85, 1.15)
         n = seq.shape[0]
@@ -161,7 +127,6 @@ def augmentar_sequencia(seq):
                                         seq[np.round(indices_orig).astype(int), j])
         seq = seq_novo
 
-    # Espelhamento pode inverter sinais dependentes de mão/lado.
     if USAR_ESPELHAMENTO and np.random.rand() > 0.65:
         seq = espelhar_sequencia(seq)
 
@@ -199,7 +164,6 @@ def aplicar_augmentation(X, y, n_aug=N_AUGMENTACOES):
     X_aug_list = [X]
     y_aug_list = [y]
 
-    # Augmentações aleatórias
     for _ in range(n_aug):
         X_novo = np.array([augmentar_sequencia(s) for s in X], dtype=np.float32)
         X_aug_list.append(X_novo)
@@ -223,12 +187,12 @@ def grupo_video(nome_video):
 
 def auditar_qualidade_preprocessamento():
     if not os.path.exists(QUALIDADE_CSV):
-        print(f"\n  [INFO] {QUALIDADE_CSV} não encontrado. Rode etapa2 para gerar auditoria.")
+        print(f"\n  [INFO] {QUALIDADE_CSV} nao encontrado. Rode etapa2 para gerar auditoria.")
         return None
 
     df_q = pd.read_csv(QUALIDADE_CSV)
     if df_q.empty:
-        print(f"\n  [AVISO] {QUALIDADE_CSV} está vazio.")
+        print(f"\n  [AVISO] {QUALIDADE_CSV} esta vazio.")
         return None
 
     resumo = (
@@ -250,13 +214,13 @@ def auditar_qualidade_preprocessamento():
         if row["taxa_aceitacao"] < 0.65:
             alertas.append("muitas janelas descartadas")
         if row["media_ratio_maos"] < 0.70:
-            alertas.append("pouca mão detectada")
+            alertas.append("pouca mao detectada")
         if row["media_movimento_maos"] < 0.004:
             alertas.append("baixo movimento")
         aviso = f" ({'; '.join(alertas)})" if alertas else ""
         print(
             f"    {row['label']}: {int(row['aceitas'])}/{int(row['janelas'])} aceitas | "
-            f"mãos {row['media_ratio_maos']:.2f} | mov {row['media_movimento_maos']:.4f}{aviso}"
+            f"maos {row['media_ratio_maos']:.2f} | mov {row['media_movimento_maos']:.4f}{aviso}"
         )
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
@@ -265,10 +229,6 @@ def auditar_qualidade_preprocessamento():
     print(f"  Auditoria resumida salva em: {saida}")
     return resumo
 
-
-# =========================
-# MODELO COM ATENÇÃO TEMPORAL
-# =========================
 
 def construir_modelo(n_frames, n_features, n_classes):
     inputs = Input(shape=(n_frames, n_features))
@@ -302,18 +262,15 @@ def construir_modelo(n_frames, n_features, n_classes):
     return Model(inputs=inputs, outputs=outputs)
 
 
-# =========================
-# MAIN
-# =========================
 print("=" * 60)
-print("  ETAPA 3 — TREINAMENTO MELHORADO (LSTM + ATENÇÃO)")
+print("  ETAPA 3 - TREINAMENTO (LSTM + ATENCAO)")
 print("=" * 60)
 
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
 if not os.path.exists(ARQUIVO_CSV):
-    print(f"[ERRO] {ARQUIVO_CSV} não encontrado.")
+    print(f"[ERRO] {ARQUIVO_CSV} nao encontrado.")
     print("Execute primeiro: python etapa2_preprocessamento.py")
     raise SystemExit
 
@@ -342,7 +299,7 @@ labels = df["label"].values
 
 expected_cols = MAX_FRAMES * N_FEATURES
 if features.shape[1] != expected_cols:
-    print(f"\n[ERRO] CSV incompatível. Esperado: {expected_cols} colunas, recebido: {features.shape[1]}")
+    print(f"\n[ERRO] CSV incompativel. Esperado: {expected_cols} colunas, recebido: {features.shape[1]}")
     print("Rode novamente: python etapa2_preprocessamento.py")
     raise SystemExit
 
@@ -356,10 +313,9 @@ print(f"\n  Classes ({n_classes}): {le.classes_.tolist()}")
 
 contagem = pd.Series(y_int).value_counts()
 if contagem.min() < 2:
-    print("\n[ERRO] Alguma classe tem menos de 2 exemplos. Adicione mais vídeos.")
+    print("\n[ERRO] Alguma classe tem menos de 2 exemplos. Adicione mais videos.")
     raise SystemExit
 
-# --- Split inteligente por grupo ---
 if "source_video" in df.columns:
     grupos = df["source_video"].map(grupo_video).values
     splitter = GroupShuffleSplit(n_splits=30, test_size=TEST_SIZE, random_state=42)
@@ -379,7 +335,7 @@ if "source_video" in df.columns:
         train_idx, test_idx = split_escolhido
         X_train_raw, X_test = X[train_idx], X[test_idx]
         y_train_raw, y_test_int = y_int[train_idx], y_int[test_idx]
-        print("\n  Split por grupo ativo: vídeos relacionados ficam no mesmo lado.")
+        print("\n  Split por grupo ativo: videos relacionados ficam no mesmo lado.")
 else:
     print("\n[AVISO] Sem coluna source_video. Usando split estratificado.")
     X_train_raw, X_test, y_train_raw, y_test_int = train_test_split(
@@ -399,15 +355,15 @@ X_train_base, X_val, y_train_base, y_val_int = train_test_split(
 print(f"  Validacao real : {X_val.shape[0]} amostras (sem augmentation)")
 
 print(f"\n  Aplicando Data Augmentation ({N_AUGMENTACOES}x)...")
-print(f"  Espelhamento automático: {'SIM' if USAR_ESPELHAMENTO else 'NÃO'}")
+print(f"  Espelhamento automatico: {'SIM' if USAR_ESPELHAMENTO else 'NAO'}")
 X_train, y_train_int = aplicar_augmentation(X_train_base, y_train_base, N_AUGMENTACOES)
-print(f"  Treino após augmentation: {X_train.shape[0]} amostras")
+print(f"  Treino apos augmentation: {X_train.shape[0]} amostras")
 
 y_train = to_categorical(y_train_int, num_classes=n_classes)
 y_val = to_categorical(y_val_int, num_classes=n_classes)
 y_test = to_categorical(y_test_int, num_classes=n_classes)
 
-print("\n  Construindo modelo com atenção temporal...")
+print("\n  Construindo modelo com atencao temporal...")
 model = construir_modelo(MAX_FRAMES, N_FEATURES, n_classes)
 
 model.compile(
@@ -421,7 +377,6 @@ model.summary()
 callbacks = [
     EarlyStopping(monitor="val_loss", patience=25, restore_best_weights=True, verbose=1),
     ModelCheckpoint(MODELO_SAIDA, monitor="val_accuracy", save_best_only=True, verbose=0),
-    # Reduz o learning rate quando estagna: ajuda a sair de platôs
     ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=10, min_lr=1e-5, verbose=1),
 ]
 
@@ -439,13 +394,12 @@ historico = model.fit(
     batch_size=BATCH_SIZE,
     validation_data=(X_val, y_val),
     callbacks=callbacks,
-    class_weight=class_weight,  # <-- linha adicionada
+    class_weight=class_weight,
     verbose=2
 )
 
-print("\n  Treinamento concluído!")
+print("\n  Treinamento concluido!")
 
-# --- Avaliação ---
 print("\n  Avaliando no conjunto de teste...")
 y_pred_prob = model.predict(X_test, verbose=0)
 y_pred = np.argmax(y_pred_prob, axis=1)
@@ -458,12 +412,11 @@ relatorio_dict = classification_report(
 )
 relatorio_texto = classification_report(y_true, y_pred, target_names=le.classes_, zero_division=0)
 
-print(f"\n  Acurácia Final no Teste: {acuracia:.2%}")
-print(f"  Acurácia Balanceada   : {acuracia_balanceada:.2%}")
-print("\n  Relatório Completo:")
+print(f"\n  Acuracia Final no Teste: {acuracia:.2%}")
+print(f"  Acuracia Balanceada   : {acuracia_balanceada:.2%}")
+print("\n  Relatorio Completo:")
 print(relatorio_texto)
 
-# --- Diagnóstico de confusão ---
 cm = confusion_matrix(y_true, y_pred)
 print("\n  Pares de sinais mais confundidos:")
 confusoes = []
@@ -476,8 +429,7 @@ for n, real, prev in confusoes[:5]:
     print(f"    '{real}' confundido com '{prev}': {n}x")
     print("    -> Dica: grave mais videos variados para esses sinais.")
 
-# --- Calibrar thresholds por classe ---
-print("\n  Calibrando thresholds de confiança por classe...")
+print("\n  Calibrando thresholds de confianca por classe...")
 thresholds = {}
 for cls_idx in range(n_classes):
     y_bin = (y_true == cls_idx)
@@ -493,7 +445,7 @@ for cls_idx in range(n_classes):
         precision = tp / max(tp + fp, 1)
         recall = tp / max(tp + fn, 1)
         f1 = 2 * precision * recall / max(precision + recall, 1e-8)
-        precision_floor = 0.60 if le.classes_[cls_idx] not in ["Sim", "Não"] else 0.70
+        precision_floor = 0.60 if le.classes_[cls_idx] not in ["Sim", "Nao"] else 0.70
 
         if precision >= precision_floor and f1 > melhor_score:
             melhor_score = f1
@@ -505,7 +457,6 @@ print("  Thresholds por classe:")
 for cls, th in sorted(thresholds.items()):
     print(f"    {cls}: {th:.2f}")
 
-# Salva thresholds junto com o encoder
 thresholds_saida = os.path.join(MODELS_DIR, "thresholds.pkl")
 with open(thresholds_saida, "wb") as f:
     pickle.dump(thresholds, f)
@@ -551,16 +502,15 @@ pd.DataFrame(
 print(f"\n  Modelo salvo  : {MODELO_SAIDA}")
 print(f"  Encoder salvo : {ENCODER_SAIDA}")
 print(f"  Thresholds    : {thresholds_saida}")
-print(f"  Métricas      : {metricas_saida}")
-print(f"  Relatório     : {relatorio_saida}")
+print(f"  Metricas      : {metricas_saida}")
+print(f"  Relatorio     : {relatorio_saida}")
 
-# --- Gráficos ---
 plt.figure(figsize=(8, 5))
 plt.plot(historico.history["accuracy"], label="Treino")
-plt.plot(historico.history["val_accuracy"], label="Validação")
-plt.title(f"Acurácia — melhor teste: {acuracia:.2%}")
-plt.xlabel("Época")
-plt.ylabel("Acurácia")
+plt.plot(historico.history["val_accuracy"], label="Validacao")
+plt.title(f"Acuracia - melhor teste: {acuracia:.2%}")
+plt.xlabel("Epoca")
+plt.ylabel("Acuracia")
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
@@ -569,9 +519,9 @@ plt.close()
 
 plt.figure(figsize=(8, 5))
 plt.plot(historico.history["loss"], label="Treino")
-plt.plot(historico.history["val_loss"], label="Validação")
+plt.plot(historico.history["val_loss"], label="Validacao")
 plt.title("Perda / Loss")
-plt.xlabel("Época")
+plt.xlabel("Epoca")
 plt.ylabel("Loss")
 plt.legend()
 plt.grid(True, alpha=0.3)
@@ -581,7 +531,7 @@ plt.close()
 
 plt.figure(figsize=(max(6, n_classes), max(5, n_classes - 1)))
 plt.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
-plt.title("Matriz de Confusão")
+plt.title("Matriz de Confusao")
 plt.colorbar()
 tick_marks = np.arange(n_classes)
 plt.xticks(tick_marks, le.classes_, rotation=45, ha="right")
@@ -597,5 +547,5 @@ plt.savefig(os.path.join(REPORTS_DIR, "matriz_confusao.png"), dpi=150, bbox_inch
 plt.close()
 
 print(f"  Graficos salvos em: {REPORTS_DIR}")
-print("\n  Próximo passo:")
+print("\n  Proximo passo:")
 print("  python app.py")

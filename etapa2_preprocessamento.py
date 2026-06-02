@@ -1,20 +1,4 @@
-"""
-=============================================================
-ETAPA 2 — PRÉ-PROCESSAMENTO COM MEDIAPIPE HANDS (MELHORADO)
-Extrai pose + mão esquerda + mão direita + pontos do rosto.
-Gera landmarks.csv compatível com etapa3 e app.py.
-
-MELHORIAS:
-  - Suporte a múltiplos vídeos por sinal (melhora muito o treino!)
-  - Detecção de qualidade do frame (descarta frames ruins)
-  - Normalização mais robusta usando distância ombro-quadril
-  - Janela deslizante: gera múltiplas amostras por vídeo longo
-  - Relatório detalhado de qualidade por sinal
-=============================================================
-
-RODAR:
-  python etapa2_preprocessamento.py
-"""
+"""Extrai landmarks dos videos e gera data/landmarks.csv."""
 
 import os
 import re
@@ -24,23 +8,18 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-# =========================
-# CONFIGURAÇÕES
-# =========================
 PASTA_DATA = os.path.join("videos", "data")
 DATA_DIR = "data"
 ARQUIVO_SAIDA = os.path.join(DATA_DIR, "landmarks.csv")
 ARQUIVO_QUALIDADE = os.path.join(DATA_DIR, "qualidade_preprocessamento.csv")
 MAX_FRAMES = 20
 LARGURA_PROCESSAMENTO = 480
-USAR_APENAS_VIDEOS_BASE = False  # MUDANÇA: False = usa TODOS os vídeos (mais dados!)
+USAR_APENAS_VIDEOS_BASE = False
 
-# Qualidade minima: descarta janelas ruins sem punir sinais mais estaticos.
 MIN_FRAMES_COM_MAOS_PADRAO = 8
 MIN_MOVIMENTO_MAOS_PADRAO = 0.0012
 
-# Algumas classes tem movimento menor ou perdem mao com mais facilidade no dataset.
-# Esses ajustes recuperam amostras boas sem reabrir muito espaco para ruido.
+# Ajustes pontuais para sinais com pouca mao detectada ou movimento menor.
 QUALIDADE_POR_SINAL = {
     "Desconhecido": {"min_maos": 4, "min_movimento": 0.0},
     "Nome": {"min_maos": 6, "min_movimento": 0.0},
@@ -51,17 +30,12 @@ QUALIDADE_POR_SINAL = {
 
 USAR_MELHOR_JANELA_FALLBACK = True
 
-# Janela deslizante para vídeos longos (gera mais amostras)
 USAR_JANELA_DESLIZANTE = True
-PASSO_JANELA = 15  # a cada 5 frames, gera uma nova amostra
+PASSO_JANELA = 15
 
 SINAIS_FILTRO = []
 
-# pose: 33 * 4 = 132
-# left hand: 21 * 3 = 63
-# right hand: 21 * 3 = 63
-# face selecionado: 10 * 3 = 30
-# total = 288
+# pose + mao esquerda + mao direita + rosto selecionado.
 N_FEATURES = 288
 
 FACE_INDICES = [1, 33, 61, 199, 263, 291, 13, 14, 10, 152]
@@ -101,10 +75,6 @@ def zeros(n):
 
 
 def normalizar_features(features):
-    """
-    Normalização melhorada: usa distância ombro-quadril como escala
-    para ser mais robusta a variações de distância da câmera.
-    """
     features = features.astype(np.float32).copy()
 
     pose = features[:132].reshape(33, 4)
@@ -134,12 +104,10 @@ def normalizar_features(features):
     tem_quadril = np.any(quadril_esq != 0) and np.any(quadril_dir != 0)
 
     if tem_ombros and tem_quadril:
-        # Escala = distância ombro-quadril (mais estável que só ombros)
         centro_ombros = (ombro_esq + ombro_dir) / 2.0
         centro_quadril = (quadril_esq + quadril_dir) / 2.0
         centro = (centro_ombros + centro_quadril) / 2.0
         escala = float(np.linalg.norm(centro_ombros[:2] - centro_quadril[:2]))
-        # Garante escala mínima usando largura dos ombros como fallback
         escala_ombros = float(np.linalg.norm(ombro_esq[:2] - ombro_dir[:2]))
         escala = max(escala, escala_ombros * 0.5)
     elif tem_ombros:
@@ -228,7 +196,6 @@ def extrair_features_frame(frame, hands_detector, pose_detector, face_detector):
 
 
 def processar_video_completo(caminho, hands_detector, pose_detector, face_detector):
-    """Lê todos os frames do vídeo e retorna lista de (features, tem_maos)."""
     cap = cv2.VideoCapture(caminho)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
@@ -250,7 +217,6 @@ def processar_video_completo(caminho, hands_detector, pose_detector, face_detect
 
 
 def amostrar_sequencia(todos_frames, inicio, fim, n_frames=MAX_FRAMES):
-    """Amostra n_frames frames uniformemente entre inicio e fim."""
     segmento = todos_frames[inicio:fim]
     if len(segmento) == 0:
         return None
@@ -308,10 +274,6 @@ def pontuar_janela(label, n_maos, movimento):
 
 
 def processar_video(caminho, label, hands_detector, pose_detector, face_detector):
-    """
-    Processa um vídeo e retorna uma ou mais amostras.
-    Se USAR_JANELA_DESLIZANTE, gera múltiplas amostras por vídeo longo.
-    """
     todos_frames = processar_video_completo(caminho, hands_detector, pose_detector, face_detector)
     if todos_frames is None or len(todos_frames) == 0:
         return [], [], 0
@@ -322,7 +284,6 @@ def processar_video(caminho, label, hands_detector, pose_detector, face_detector
     candidatas = []
 
     if not USAR_JANELA_DESLIZANTE or total <= MAX_FRAMES:
-        # Modo simples: uma única amostra
         resultado = amostrar_sequencia(todos_frames, 0, total)
         if resultado:
             seq, n_maos, movimento = resultado
@@ -332,7 +293,6 @@ def processar_video(caminho, label, hands_detector, pose_detector, face_detector
             if aceita:
                 amostras.append(seq)
     else:
-        # Janela deslizante: gera múltiplas amostras
         for inicio in range(0, total - MAX_FRAMES + 1, PASSO_JANELA):
             fim = inicio + MAX_FRAMES
             resultado = amostrar_sequencia(todos_frames, inicio, fim)
@@ -344,7 +304,6 @@ def processar_video(caminho, label, hands_detector, pose_detector, face_detector
                 if aceita:
                     amostras.append(seq)
 
-        # Garante pelo menos uma amostra (do vídeo inteiro)
         if not amostras:
             resultado = amostrar_sequencia(todos_frames, 0, total)
             if resultado:
@@ -382,7 +341,7 @@ def gerar_colunas():
 
 def main():
     if not os.path.exists(PASTA_DATA):
-        print(f"[ERRO] Pasta não encontrada: {PASTA_DATA}")
+        print(f"[ERRO] Pasta nao encontrada: {PASTA_DATA}")
         return
 
     todos_videos = [
@@ -395,9 +354,9 @@ def main():
         for nome in sorted(todos_videos):
             por_grupo.setdefault(grupo_video(nome), nome)
         todos_videos = list(por_grupo.values())
-        print("Usando apenas vídeos-base.")
+        print("Usando apenas videos-base.")
     else:
-        print(f"Usando TODOS os {len(todos_videos)} vídeos encontrados (incluindo cópias).")
+        print(f"Usando TODOS os {len(todos_videos)} videos encontrados (incluindo copias).")
 
     if SINAIS_FILTRO:
         filtro_lower = [s.lower() for s in SINAIS_FILTRO]
@@ -407,17 +366,17 @@ def main():
     sinais_unicos = sorted(set(extrair_label(f) for f in todos_videos))
 
     print("\n" + "=" * 60)
-    print("  ETAPA 2 — PRÉ-PROCESSAMENTO MELHORADO")
+    print("  ETAPA 2 - PRE-PROCESSAMENTO")
     print("=" * 60)
-    print(f"  Vídeos encontrados  : {len(todos_videos)}")
-    print(f"  Sinais únicos       : {len(sinais_unicos)}")
+    print(f"  Videos encontrados  : {len(todos_videos)}")
+    print(f"  Sinais unicos       : {len(sinais_unicos)}")
     print(f"  Sinais              : {sinais_unicos}")
     print(f"  Features/frame      : {N_FEATURES}")
-    print(f"  Janela deslizante   : {'SIM (mais amostras!)' if USAR_JANELA_DESLIZANTE else 'NÃO'}")
+    print(f"  Janela deslizante   : {'SIM (mais amostras!)' if USAR_JANELA_DESLIZANTE else 'NAO'}")
     print()
 
     if len(todos_videos) == 0:
-        print("[AVISO] Nenhum vídeo encontrado.")
+        print("[AVISO] Nenhum video encontrado.")
         return
 
     linhas = []
@@ -438,7 +397,7 @@ def main():
         min_detection_confidence=0.5, min_tracking_confidence=0.5,
     ) as face_detector:
 
-        for nome in tqdm(todos_videos, desc="Processando vídeos"):
+        for nome in tqdm(todos_videos, desc="Processando videos"):
             label = extrair_label(nome)
             caminho = os.path.join(PASTA_DATA, nome)
 
@@ -478,20 +437,19 @@ def main():
             ok_count += 1
 
     if not linhas:
-        print("[ERRO] Nenhum vídeo processado com sucesso.")
+        print("[ERRO] Nenhum video processado com sucesso.")
         return
 
     colunas = gerar_colunas()
     colunas.insert(-1, "source_video")
     df = pd.DataFrame(linhas, columns=colunas)
 
-    # Equilibra limitando ao máximo por sinal
     MAX_AMOSTRAS_POR_SINAL = 150
     df = df.groupby('label').apply(
         lambda x: x.sample(min(len(x), MAX_AMOSTRAS_POR_SINAL), random_state=42)
     ).reset_index(drop=True)
 
-    print(f"\n  Após balanceamento:")
+    print(f"\n  Apos balanceamento:")
     print(df['label'].value_counts().to_string())
 
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -499,11 +457,11 @@ def main():
     pd.DataFrame(qualidade).to_csv(ARQUIVO_QUALIDADE, index=False)
 
     print("\n" + "=" * 60)
-    print("  CONCLUÍDO!")
+    print("  CONCLUIDO!")
     print("=" * 60)
-    print(f"  Vídeos processados : {ok_count} | Erros/descartados: {err_count}")
+    print(f"  Videos processados : {ok_count} | Erros/descartados: {err_count}")
     print(f"  Total de amostras  : {len(df)}")
-    print(f"  Sinais únicos      : {df['label'].nunique()}")
+    print(f"  Sinais unicos      : {df['label'].nunique()}")
     print(f"\n  Amostras por sinal:")
     for sinal, n in sorted(amostras_por_sinal.items()):
         status = "OK" if n >= 5 else "POUCOS DADOS"
@@ -511,12 +469,12 @@ def main():
 
     sinal_minimo = min(amostras_por_sinal.values()) if amostras_por_sinal else 0
     if sinal_minimo < 5:
-        print("\n  ⚠ AVISO: Alguns sinais têm menos de 5 amostras.")
-        print("    Adicione mais vídeos para esses sinais para melhorar a acurácia.")
+        print("\n   AVISO: Alguns sinais tem menos de 5 amostras.")
+        print("    Adicione mais videos para esses sinais para melhorar a acuracia.")
 
     print(f"\n  CSV salvo em: {ARQUIVO_SAIDA}")
     print(f"  Qualidade salva em: {ARQUIVO_QUALIDADE}")
-    print("\n  Próximo passo:")
+    print("\n  Proximo passo:")
     print("  python etapa3_treinamento.py")
 
 

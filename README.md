@@ -1,101 +1,180 @@
-# 🤟 Tradutor de Libras com IA
+# Tradutor de Libras com IA
 
-Este projeto tem como objetivo reconhecer sinais da Língua Brasileira de Sinais (Libras) a partir de vídeos, utilizando técnicas de visão computacional e aprendizado de máquina.
+Projeto para reconhecer sinais de Libras a partir de videos e da camera, usando MediaPipe para extrair landmarks e uma rede neural temporal para classificar os sinais.
 
-A proposta é transformar movimentos das mãos em dados numéricos e treinar um modelo capaz de identificar automaticamente qual sinal está sendo realizado.
+## Como funciona
 
----
+O projeto tem tres partes principais:
 
-## 🧠 Como o projeto funciona
+1. **Pre-processamento**
+   - Le os videos em `videos/data`.
+   - Usa MediaPipe para extrair pose, mao esquerda, mao direita e alguns pontos do rosto.
+   - Gera sequencias com `20` frames.
+   - Salva os dados em `data/landmarks.csv`.
 
-O sistema é dividido em duas etapas principais:
+2. **Treinamento**
+   - Le `data/landmarks.csv`.
+   - Treina um modelo com Conv1D, LSTM bidirecional e atencao temporal.
+   - Salva o modelo, o encoder das classes, thresholds e relatorios.
 
-### 🔹 1. Extração de dados (pré-processamento)
+3. **Aplicacao**
+   - Roda uma interface Flask.
+   - Captura frames da camera.
+   - Aplica o mesmo pre-processamento usado no treino.
+   - Mostra o sinal reconhecido e a confianca.
 
-Os vídeos são analisados frame a frame utilizando o MediaPipe, uma biblioteca de visão computacional.
+## Estrutura principal
 
-Para cada frame:
-- A mão é detectada  
-- São extraídos 21 pontos (landmarks) da mão  
-- Cada ponto possui coordenadas (x, y, z)  
+```text
+.
+├── app.py
+├── etapa2_preprocessamento.py
+├── etapa3_treinamento.py
+├── validar_dataset.py
+├── requirements.txt
+├── videos/
+│   └── data/
+├── data/
+├── models/
+├── reports/
+└── front/
+```
 
-Isso gera:
-- 63 valores por frame  
-- 30 frames por vídeo  
-- Total de 1890 valores por vídeo  
+## Padrao dos videos
 
-Esses dados são organizados em formato tabular e armazenados no arquivo:
+Os videos devem ficar em:
 
+```text
+videos/data/
+```
+
+O nome precisa seguir este formato:
+
+```text
+NomeDoSinal_Articulador1.mp4
+NomeDoSinal_Articulador2.mp4
+NomeDoSinal_Articulador3.mp4
+```
+
+Exemplos:
+
+```text
+Oi_Articulador1.mp4
+Casa_Articulador2.mp4
+Obrigado_Articulador3.mp4
+Bebida_Articulador1.mp4
+```
+
+Sempre que um novo sinal for adicionado, basta colocar os videos nesse padrao. O codigo reconhece novas classes automaticamente.
+
+## Instalacao
+
+Use Python 3.11.
+
+No PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\activate
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Se o PowerShell bloquear a ativacao do ambiente virtual:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\activate
+```
+
+## Validar a base de videos
+
+Antes de rodar o pre-processamento, confira se os videos estao corretos:
+
+```powershell
+python validar_dataset.py
+```
+
+Esse script verifica:
+
+- arquivos fora do padrao `NomeDoSinal_ArticuladorN.mp4`;
+- videos que nao abrem ou estao sem frames;
+- quantidade de videos por sinal;
+- sinais com poucos videos.
+
+## Rodar o projeto
+
+Depois de organizar os videos:
+
+```powershell
+python validar_dataset.py
+python etapa2_preprocessamento.py
+python etapa3_treinamento.py
+python app.py
+```
+
+Abra no navegador:
+
+```text
+http://localhost:5000
+```
+
+## Arquivos gerados
+
+O pre-processamento gera:
+
+```text
 data/landmarks.csv
+data/qualidade_preprocessamento.csv
+```
 
----
+O treinamento gera:
 
-### 🔹 2. Treinamento do modelo
+```text
+models/modelo_libras.keras
+models/label_encoder.pkl
+models/thresholds.pkl
+reports/metricas_teste.json
+reports/relatorio_classificacao.txt
+reports/confusoes.csv
+reports/resultado_treinamento.png
+reports/resultado_loss.png
+reports/matriz_confusao.png
+reports/auditoria_preprocessamento.csv
+```
 
-Os dados extraídos são utilizados para treinar uma rede neural do tipo LSTM (Long Short-Term Memory).
+## Quando adicionar novos videos
 
-Esse tipo de rede é ideal para:
-- Processar sequências  
-- Entender movimento ao longo do tempo  
+Sempre que novos videos entrarem na pasta `videos/data`, rode novamente:
 
-O modelo aprende padrões de movimento específicos de cada sinal.
+```powershell
+python validar_dataset.py
+python etapa2_preprocessamento.py
+python etapa3_treinamento.py
+```
 
-Ao final do treinamento, são gerados:
+Depois disso, rode a aplicacao:
 
-- models/modelo_libras.keras → modelo treinado  
-- models/label_encoder.pkl → mapeamento dos sinais  
-- models/thresholds.pkl → limites de confiança por classe
-- reports/resultado_treinamento.png → gráfico de desempenho  
-- reports/resultado_loss.png → gráfico de perda do treino
-- reports/matriz_confusao.png → análise dos erros do modelo  
+```powershell
+python app.py
+```
 
----
+## Recomendacao de quantidade
 
-## 📂 Organização dos dados
+A qualidade do modelo depende bastante da quantidade e da variedade dos videos.
 
-Os vídeos devem ser organizados em pastas, onde cada pasta representa um sinal:
+| Videos por sinal | Expectativa |
+| --- | --- |
+| menos de 10 | fraco/instavel |
+| 10 a 20 | razoavel |
+| 20 a 30 | bom |
+| 50 ou mais | melhor generalizacao |
 
-videos/
-├── ola/
-├── agua/
-├── ajuda/
+Tente variar pessoa, iluminacao, distancia da camera e velocidade do sinal.
 
-Cada pasta contém vídeos diferentes do mesmo sinal.
+## Observacoes
 
-Isso permite que o modelo aprenda variações do movimento.
-
----
-
-## 🎯 Objetivo do modelo
-
-O modelo é treinado para:
-
-- Identificar padrões de movimento das mãos  
-- Diferenciar sinais semelhantes  
-- Generalizar para novos vídeos  
-
----
-
-## 📊 Desempenho esperado
-
-A qualidade do modelo depende diretamente da quantidade e qualidade dos dados:
-
-| Vídeos por sinal | Desempenho esperado |
-|-----------------|--------------------|
-| 5–10            | médio              |
-| 20–30           | bom                |
-| 50+             | alto               |
-
----
-
-## ⚠️ Limitações
-
-- Sensível à iluminação e qualidade do vídeo  
-- Pode confundir sinais parecidos  
-- Depende da consistência dos dados de entrada  
-
----
-
-## 📌 Resumo
-
-O projeto transforma vídeos em dados numéricos e utiliza uma rede neural para aprender padrões de movimento, permitindo o reconhecimento automático de sinais em Libras.
+- O modelo atual usa `MAX_FRAMES = 20` e `N_FEATURES = 288`.
+- O pre-processamento extrai pose, duas maos e pontos selecionados do rosto.
+- O sinal `Desconhecido` ajuda o sistema a rejeitar movimentos que nao pertencem as classes principais.
+- Se a acuracia ficar baixa, olhe primeiro os arquivos em `reports/`, principalmente `relatorio_classificacao.txt`, `confusoes.csv` e `auditoria_preprocessamento.csv`.
