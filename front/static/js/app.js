@@ -20,7 +20,7 @@ const INTERVALO_ENVIO_MS = 65;
 async function toggleCamera() {
   if (!cameraAtiva) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+      stream = await abrirCamera();
       video.srcObject = stream;
       await video.play();
       await resetarBackend();
@@ -30,11 +30,34 @@ async function toggleCamera() {
       document.getElementById('statusText').textContent = 'Ao vivo';
       intervalo = setInterval(enviarFrame, INTERVALO_ENVIO_MS);
     } catch (e) {
-      alert('Não foi possível acessar a câmera: ' + e.message);
+      alert(montarMensagemErroCamera(e));
     }
   } else {
     pararCamera();
   }
+}
+
+function montarMensagemErroCamera(erro) {
+  const nome = erro?.name || '';
+  const mensagem = erro?.message || 'Erro desconhecido.';
+
+  if (nome === 'AbortError' || mensagem.toLowerCase().includes('aborted')) {
+    return 'Não foi possível iniciar a câmera. Feche outras abas ou aplicativos que possam estar usando a webcam, atualize a página e tente de novo.';
+  }
+
+  if (nome === 'NotAllowedError' || nome === 'SecurityError') {
+    return 'Permita o acesso à câmera no navegador e tente iniciar novamente.';
+  }
+
+  if (nome === 'NotFoundError' || nome === 'DevicesNotFoundError') {
+    return 'Nenhuma câmera foi encontrada neste dispositivo.';
+  }
+
+  if (nome === 'NotReadableError') {
+    return 'A câmera está ocupada por outro aplicativo ou o navegador não conseguiu acessá-la agora.';
+  }
+
+  return 'Não foi possível acessar a câmera: ' + mensagem;
 }
 
 function pararCamera() {
@@ -61,7 +84,7 @@ function pararCamera() {
 function limparSinalAtual() {
   const el = document.getElementById('sinaLabel');
   el.textContent = '-';
-  el.classList.remove('flash');
+  el.classList.remove('flash', 'unknown');
   framesSemSinal = 0;
 }
 
@@ -70,6 +93,22 @@ async function resetarBackend() {
     await fetch('/reset', { method: 'POST' });
   } catch (e) {
     console.warn('Nao foi possivel resetar o backend:', e);
+  }
+}
+
+async function abrirCamera() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+      audio: false
+    });
+  } catch (erroInicial) {
+    console.warn('Falha ao abrir camera com resolucao preferida:', erroInicial);
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (erroFallback) {
+      throw erroFallback;
+    }
   }
 }
 
@@ -156,7 +195,7 @@ function processarResposta(data) {
   if (data.label) {
     const el = document.getElementById('sinaLabel');
     el.textContent = data.label;
-    el.classList.remove('flash');
+    el.classList.remove('flash', 'unknown');
     void el.offsetWidth;
     el.classList.add('flash');
 
@@ -170,19 +209,30 @@ function processarResposta(data) {
   } else {
     framesSemSinal += 1;
     const waiting = data.waiting || '';
+    const foraDoVocabulario = waiting.includes('vocabul');
     const deveLimparAgora =
       maos <= 0 ||
-      waiting.includes('vocabul') ||
       waiting.includes('Mostre as') ||
       waiting.includes('Ajuste as');
 
-    if (deveLimparAgora || framesSemSinal >= FRAMES_PARA_LIMPAR_SINAL) {
+    if (foraDoVocabulario) {
+      mostrarGestoForaDoVocabulario();
+      framesSemSinal = 0;
+    } else if (deveLimparAgora || framesSemSinal >= FRAMES_PARA_LIMPAR_SINAL) {
       limparSinalAtual();
     }
   }
 
   // Desenha landmarks
   desenharLandmarks(data.visual || {});
+}
+
+function mostrarGestoForaDoVocabulario() {
+  const el = document.getElementById('sinaLabel');
+  el.textContent = 'Gesto fora do vocabulário';
+  el.classList.remove('flash');
+  el.classList.add('unknown');
+  document.getElementById('feedbackStatus').textContent = 'Nenhuma palavra confirmada.';
 }
 
 function atualizarPerformance(latenciaMs) {

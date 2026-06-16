@@ -1,20 +1,20 @@
-Acuracia final no teste: 64.67%
-Acuracia balanceada: 67.27%
+Acuracia final no teste: 67.03%
+Acuracia balanceada: 67.79%
 
               precision    recall  f1-score   support
 
-     Aceitar       0.45      0.70      0.55        60
-    Banheiro       0.96      0.78      0.86        69
-      Bebida       0.68      0.81      0.74        57
-       Calmo       0.58      0.79      0.67        53
-        Casa       0.56      0.67      0.61        30
-Desconhecido       0.55      0.31      0.40        74
-       Livro       0.52      0.82      0.64        17
-        Nome       0.74      0.80      0.77        35
-    Obrigado       0.73      0.56      0.64        39
-          Oi       0.64      0.36      0.46        58
-     Sortudo       0.87      0.79      0.83        43
+     Aceitar       0.57      0.57      0.57        49
+    Banheiro       0.90      0.75      0.82        84
+      Bebida       0.97      0.66      0.78        47
+       Calmo       0.78      0.64      0.70        59
+        Casa       0.65      0.72      0.68        36
+Desconhecido       0.44      0.81      0.57        37
+       Livro       0.30      0.46      0.36        24
+        Nome       0.70      0.62      0.66        34
+    Obrigado       0.92      0.59      0.72        99
+          Oi       0.39      0.88      0.55        17
+     Sortudo       0.64      0.75      0.69        57
 
-    accuracy                           0.65       535
-   macro avg       0.66      0.67      0.65       535
-weighted avg       0.67      0.65      0.64       535
+    accuracy                           0.67       543
+   macro avg       0.66      0.68      0.65       543
+weighted avg       0.74      0.67      0.68       543
