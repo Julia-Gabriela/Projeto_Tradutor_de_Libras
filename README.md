@@ -1,77 +1,91 @@
 # Tradutor de Libras com IA
 
-Projeto para reconhecer sinais de Libras a partir de videos e da camera, usando MediaPipe para extrair landmarks e uma rede neural temporal para classificar os sinais.
+Aplicacao web para reconhecer sinais de Libras em tempo real pela camera. O projeto usa visao computacional para extrair pontos do corpo, maos e rosto, e uma rede neural temporal para classificar o gesto realizado.
+
+O objetivo e demonstrar um prototipo funcional de traducao de sinais para palavras, com interface simples, historico de leituras e tratamento para gestos fora do vocabulario treinado.
+
+## Visao geral
+
+- Reconhecimento em tempo real pela webcam.
+- Extracao de landmarks com MediaPipe.
+- Classificacao temporal com rede neural treinada em videos.
+- Interface web feita com Flask, HTML, CSS e JavaScript.
+- Classe `Desconhecido` para reduzir classificacoes indevidas.
+- Relatorios de treino e avaliacao gerados automaticamente.
+
+## Tecnologias usadas
+
+- Python 3.11
+- Flask
+- TensorFlow/Keras
+- MediaPipe
+- OpenCV
+- NumPy, Pandas e Scikit-learn
+- HTML, CSS e JavaScript
+
+## Sinais reconhecidos
+
+O modelo atual trabalha com as seguintes classes:
+
+| Classe | Videos |
+| --- | ---: |
+| Aceitar | 20 |
+| Banheiro | 20 |
+| Bebida | 22 |
+| Calmo | 20 |
+| Casa | 20 |
+| Desconhecido | 120 |
+| Livro | 20 |
+| Nome | 20 |
+| Obrigado | 20 |
+| Oi | 20 |
+| Sortudo | 20 |
 
 ## Como funciona
 
-O projeto tem tres partes principais:
+1. Os videos sao armazenados em `videos/data`.
+2. O script de preprocessamento extrai landmarks de pose, maos e rosto com MediaPipe.
+3. As sequencias extraidas sao transformadas em janelas temporais de 20 frames.
+4. O modelo neural aprende a classificar cada sequencia.
+5. A aplicacao Flask usa a camera em tempo real e aplica o mesmo fluxo de extracao.
+6. A interface mostra a palavra reconhecida, historico e sinais disponiveis.
 
-1. **Pre-processamento**
-   - Le os videos em `videos/data`.
-   - Usa MediaPipe para extrair pose, mao esquerda, mao direita e alguns pontos do rosto.
-   - Gera sequencias com `20` frames.
-   - Salva os dados em `data/landmarks.csv`.
+## Resultado atual
 
-2. **Treinamento**
-   - Le `data/landmarks.csv`.
-   - Treina um modelo com Conv1D, LSTM bidirecional e atencao temporal.
-   - Salva o modelo, o encoder das classes, thresholds e relatorios.
+Ultima avaliacao registrada:
 
-3. **Aplicacao**
-   - Roda uma interface Flask.
-   - Captura frames da camera.
-   - Aplica o mesmo pre-processamento usado no treino.
-   - Mostra o sinal reconhecido e a confianca.
+- Acuracia no teste: **67.03%**
+- Acuracia balanceada: **67.79%**
+- Amostras de teste: **543**
 
-## Estrutura principal
+Algumas classes tiveram melhor desempenho, como `Banheiro`, `Bebida`, `Calmo`, `Casa`, `Obrigado` e `Sortudo`. A classe `Desconhecido` foi reforcada para ajudar o sistema a rejeitar gestos que nao fazem parte do vocabulario.
+
+Como o dataset ainda e pequeno para algumas classes, o modelo pode confundir sinais parecidos ou variar conforme iluminacao, enquadramento e velocidade do gesto.
+
+## Estrutura do projeto
 
 ```text
 .
-├── app.py
-├── etapa2_preprocessamento.py
-├── etapa3_treinamento.py
-├── validar_dataset.py
-├── requirements.txt
-├── videos/
-│   └── data/
-├── data/
-├── models/
-├── reports/
-└── front/
+|-- app.py
+|-- etapa2_preprocessamento.py
+|-- etapa3_treinamento.py
+|-- validar_dataset.py
+|-- requirements.txt
+|-- front/
+|   |-- static/
+|   |   |-- css/
+|   |   `-- js/
+|   `-- templates/
+|-- videos/
+|   `-- data/
+|-- data/
+|-- models/
+`-- reports/
 ```
 
-## Padrao dos videos
+## Como executar
 
-Os videos devem ficar em:
-
-```text
-videos/data/
-```
-
-O nome precisa seguir este formato:
-
-```text
-NomeDoSinal_Articulador1.mp4
-NomeDoSinal_Articulador2.mp4
-NomeDoSinal_Articulador3.mp4
-```
-
-Exemplos:
-
-```text
-Oi_Articulador1.mp4
-Casa_Articulador2.mp4
-Obrigado_Articulador3.mp4
-Bebida_Articulador1.mp4
-```
-
-Sempre que um novo sinal for adicionado, basta colocar os videos nesse padrao. O codigo reconhece novas classes automaticamente.
-
-## Instalacao
-
-Use Python 3.11.
-
-No PowerShell:
+Crie e ative o ambiente virtual:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -80,101 +94,72 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Se o PowerShell bloquear a ativacao do ambiente virtual:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\activate
-```
-
-## Validar a base de videos
-
-Antes de rodar o pre-processamento, confira se os videos estao corretos:
+Valide a base de videos:
 
 ```powershell
 python validar_dataset.py
 ```
 
-Esse script verifica:
-
-- arquivos fora do padrao `NomeDoSinal_ArticuladorN.mp4`;
-- videos que nao abrem ou estao sem frames;
-- quantidade de videos por sinal;
-- sinais com poucos videos.
-
-## Rodar o projeto
-
-Depois de organizar os videos:
+Rode o preprocessamento e o treinamento:
 
 ```powershell
-python validar_dataset.py
 python etapa2_preprocessamento.py
 python etapa3_treinamento.py
+```
+
+Inicie a aplicacao:
+
+```powershell
 python app.py
 ```
 
-Abra no navegador:
+Acesse no navegador:
 
 ```text
 http://localhost:5000
 ```
 
+## Padrao dos videos
+
+Os videos devem ficar em `videos/data` e seguir o formato:
+
+```text
+NomeDoSinal_Articulador1.mp4
+NomeDoSinal_Articulador2.mp4
+NomeDoSinal_Articulador3.mp4
+```
+
+Exemplo:
+
+```text
+Oi_Articulador1.mp4
+Casa_Articulador2.mp4
+Obrigado_Articulador3.mp4
+```
+
 ## Arquivos gerados
 
-O pre-processamento gera:
+Durante o preprocessamento:
 
-```text
-data/landmarks.csv
-data/qualidade_preprocessamento.csv
-```
+- `data/landmarks.csv`
+- `data/qualidade_preprocessamento.csv`
 
-O treinamento gera:
+Durante o treinamento:
 
-```text
-models/modelo_libras.keras
-models/label_encoder.pkl
-models/thresholds.pkl
-reports/metricas_teste.json
-reports/relatorio_classificacao.txt
-reports/confusoes.csv
-reports/resultado_treinamento.png
-reports/resultado_loss.png
-reports/matriz_confusao.png
-reports/auditoria_preprocessamento.csv
-```
+- `models/modelo_libras.keras`
+- `models/label_encoder.pkl`
+- `models/thresholds.pkl`
+- `reports/metricas_teste.json`
+- `reports/relatorio_classificacao.txt`
+- `reports/confusoes.csv`
+- `reports/matriz_confusao.png`
+- `reports/resultado_treinamento.png`
+- `reports/resultado_loss.png`
 
-## Quando adicionar novos videos
+## Limitacoes
 
-Sempre que novos videos entrarem na pasta `videos/data`, rode novamente:
+Este projeto e um prototipo academico. O desempenho depende diretamente da variedade e qualidade dos videos usados no treinamento. Para melhorar a generalizacao, o ideal e aumentar o dataset com mais pessoas, iluminacoes, distancias da camera e exemplos de gestos desconhecidos.
 
-```powershell
-python validar_dataset.py
-python etapa2_preprocessamento.py
-python etapa3_treinamento.py
-```
+## Status
 
-Depois disso, rode a aplicacao:
-
-```powershell
-python app.py
-```
-
-## Recomendacao de quantidade
-
-A qualidade do modelo depende bastante da quantidade e da variedade dos videos.
-
-| Videos por sinal | Expectativa |
-| --- | --- |
-| menos de 10 | fraco/instavel |
-| 10 a 20 | razoavel |
-| 20 a 30 | bom |
-| 50 ou mais | melhor generalizacao |
-
-Tente variar pessoa, iluminacao, distancia da camera e velocidade do sinal.
-
-## Observacoes
-
-- O modelo atual usa `MAX_FRAMES = 20` e `N_FEATURES = 288`.
-- O pre-processamento extrai pose, duas maos e pontos selecionados do rosto.
-- O sinal `Desconhecido` ajuda o sistema a rejeitar movimentos que nao pertencem as classes principais.
-- Se a acuracia ficar baixa, olhe primeiro os arquivos em `reports/`, principalmente `relatorio_classificacao.txt`, `confusoes.csv` e `auditoria_preprocessamento.csv`.
+Projeto em versao funcional para demonstracao, com pipeline completo de validacao, preprocessamento, treinamento, avaliacao e uso em tempo real.
