@@ -25,7 +25,7 @@ async function toggleCamera() {
       await video.play();
       await resetarBackend();
       cameraAtiva = true;
-      document.getElementById('btnCamera').textContent = '⏹ Parar Câmera';
+      document.getElementById('btnCamera').textContent = '■ Parar câmera';
       document.getElementById('camStatus').classList.add('active');
       document.getElementById('statusText').textContent = 'Ao vivo';
       intervalo = setInterval(enviarFrame, INTERVALO_ENVIO_MS);
@@ -41,7 +41,7 @@ function pararCamera() {
   clearInterval(intervalo);
   if (stream) stream.getTracks().forEach(t => t.stop());
   cameraAtiva = false;
-  document.getElementById('btnCamera').textContent = '▶ Iniciar Câmera';
+  document.getElementById('btnCamera').textContent = '▶ Iniciar câmera';
   document.getElementById('camStatus').classList.remove('active');
   document.getElementById('statusText').textContent = 'Câmera desligada';
   document.getElementById('confBarWrap').classList.remove('visible');
@@ -145,7 +145,7 @@ function processarResposta(data) {
     document.getElementById('confLabelPct').textContent = pct + '%';
     const fill = document.getElementById('confFill');
     fill.style.width = pct + '%';
-    fill.style.background = pct >= 80 ? 'var(--green)' : pct >= 60 ? 'var(--warn)' : 'var(--muted)';
+    fill.style.background = pct >= 80 ? 'linear-gradient(90deg,var(--accent),var(--accent2))' : pct >= 60 ? 'var(--warn)' : 'var(--muted)';
   }
 
   // Waiting text
@@ -352,12 +352,12 @@ function desenharLandmarks(visual) {
   // Mãos
   if (visual.hands) {
     visual.hands.forEach((mao, idx) => {
-      ctx.strokeStyle = idx === 0 ? '#00e5ff' : '#7c3aed';
+      ctx.strokeStyle = idx === 0 ? '#ff4fbd' : '#7ee8ff';
       ctx.lineWidth = 1.5;
       mao.forEach(p => {
         ctx.beginPath();
         ctx.arc(p[0] * W, p[1] * H, 3, 0, Math.PI * 2);
-        ctx.fillStyle = idx === 0 ? '#00e5ff' : '#7c3aed';
+        ctx.fillStyle = idx === 0 ? '#ff4fbd' : '#7ee8ff';
         ctx.fill();
       });
     });
