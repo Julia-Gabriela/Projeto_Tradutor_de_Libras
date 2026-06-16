@@ -15,6 +15,7 @@ import mediapipe as mp
 import tensorflow as tf
 from flask import Flask, render_template, request, jsonify
 from collections import deque
+from frase_builder import formatar_sinal, montar_frase
 
 inicio_app = time.perf_counter()
 
@@ -75,9 +76,11 @@ ultimo_label_emitido = None
 ultima_seq_feedback = None
 ultimo_label_feedback = None
 ultima_conf_feedback = 0.0
+frase_detectada = []
 
 hands_lock = threading.Lock()
 pose_face_lock = threading.Lock()
+frase_lock = threading.Lock()
 
 visual_frame_count = 0
 PROCESSAR_POSE_ROSTO_A_CADA = 4
@@ -142,6 +145,45 @@ def deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, marg
         segunda_conf >= CONFIANCA_REJEICAO_PROXIMA and
         margem_voto <= MARGEM_REJEICAO_PROXIMA
     )
+
+
+def estado_frase():
+    with frase_lock:
+        sinais = list(frase_detectada)
+
+    return {
+        "sinais_detectados": sinais,
+        "sinais_texto": " | ".join(sinais),
+        "frase_sugerida": montar_frase(sinais),
+    }
+
+
+def resposta_inferencia(payload):
+    payload.update(estado_frase())
+    return jsonify(payload)
+
+
+def adicionar_sinal_frase(label):
+    sinal = formatar_sinal(label)
+    if not sinal or eh_label_rejeicao(label):
+        return False
+
+    with frase_lock:
+        if frase_detectada and frase_detectada[-1] == sinal:
+            return False
+        frase_detectada.append(sinal)
+    return True
+
+
+def limpar_frase_detectada():
+    with frase_lock:
+        frase_detectada.clear()
+
+
+def remover_ultimo_sinal_frase():
+    with frase_lock:
+        if frase_detectada:
+            frase_detectada.pop()
 
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
@@ -461,7 +503,28 @@ def health():
 @app.route("/reset", methods=["POST"])
 def reset():
     resetar_estado_inferencia()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, **estado_frase()})
+
+
+@app.route("/phrase", methods=["GET"])
+def phrase():
+    return jsonify({"ok": True, **estado_frase()})
+
+
+@app.route("/phrase/clear", methods=["POST"])
+def phrase_clear():
+    global ultimo_label_emitido
+    limpar_frase_detectada()
+    ultimo_label_emitido = None
+    return jsonify({"ok": True, **estado_frase()})
+
+
+@app.route("/phrase/undo", methods=["POST"])
+def phrase_undo():
+    global ultimo_label_emitido
+    remover_ultimo_sinal_frase()
+    ultimo_label_emitido = None
+    return jsonify({"ok": True, **estado_frase()})
 
 
 @app.route("/feedback", methods=["POST"])
@@ -501,10 +564,10 @@ def predict():
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     except Exception:
-        return jsonify({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Erro ao ler frame."})
+        return resposta_inferencia({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Erro ao ler frame."})
 
     if frame is None:
-        return jsonify({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Frame invalido."})
+        return resposta_inferencia({"label": None, "confidence": 0.0, "visual": {}, "debug": {}, "waiting": "Frame invalido."})
 
     features, visual, debug = extrair_features_e_visual(frame)
 
@@ -512,15 +575,15 @@ def predict():
         frames_sem_maos += 1
         debounce_counter = max(0, debounce_counter - 1)
         if frames_sem_maos <= FRAMES_SEM_MAOS_TOLERANCIA and len(frame_buffer) > 0:
-            return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
-                            "waiting": "Mantendo leitura..."})
+            return resposta_inferencia({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
+                                        "waiting": "Mantendo leitura..."})
 
         frame_buffer.clear()
         historico_predicoes.clear()
         ultimo_features = None
         ultimo_label_emitido = None
-        return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
-                        "waiting": "Mostre as maos para a camera."})
+        return resposta_inferencia({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
+                                    "waiting": "Mostre as maos para a camera."})
 
     frames_sem_maos = 0
 
@@ -540,7 +603,7 @@ def predict():
     )
 
     if frames_validos < MIN_FRAMES_VALIDOS_PREDICAO:
-        return jsonify({
+        return resposta_inferencia({
             "label": None,
             "confidence": 0.0,
             "visual": visual,
@@ -549,8 +612,8 @@ def predict():
         })
 
     if len(frame_buffer) < MAX_FRAMES:
-        return jsonify({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
-                        "waiting": f"Lendo sinal... {len(frame_buffer)}/{MAX_FRAMES}"})
+        return resposta_inferencia({"label": None, "confidence": 0.0, "visual": visual, "debug": debug,
+                                    "waiting": f"Lendo sinal... {len(frame_buffer)}/{MAX_FRAMES}"})
 
     X = np.array(list(frame_buffer), dtype=np.float32).reshape(1, MAX_FRAMES, N_FEATURES)
     probs = model.predict(X, verbose=0)[0]
@@ -582,6 +645,7 @@ def predict():
 
     resultado_voto = votar_predicao(list(historico_predicoes))
     label_final = None
+    sinal_adicionado = False
     conf_voto = conf  # fallback seguro
     
     if resultado_voto:
@@ -607,6 +671,7 @@ def predict():
 
         if aceitar:
             label_final = label_voto
+            sinal_adicionado = adicionar_sinal_frase(label_voto)
             ultimo_label_emitido = label_voto
             debounce_counter = DEBOUNCE_FRAMES
             for _ in range(MAX_FRAMES // 2):
@@ -632,8 +697,9 @@ def predict():
     if debounce_counter > 0 and not label_final:
         waiting_msg = f"Aguardando proximo sinal... ({debounce_counter})"
 
-    return jsonify({
+    return resposta_inferencia({
         "label": label_final,
+        "sinal_adicionado": sinal_adicionado,
         "confidence": conf_voto if resultado_voto else conf,
         "live_label": label_previsto,
         "live_conf": conf,

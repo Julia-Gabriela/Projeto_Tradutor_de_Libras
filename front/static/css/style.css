@@ -533,12 +533,26 @@ select.btn-mini option:checked {
   text-transform:uppercase;
 }
 
+.frase-sugerida-label {
+  margin-top:.8rem;
+}
+
 .frase-texto {
   color:#fff;
   font-size:1.08rem;
   font-weight:800;
   line-height:1.35;
   word-break:break-word;
+}
+
+.sinais-detectados {
+  color:#f6d7ef;
+  font-size:.98rem;
+}
+
+.frase-sugerida {
+  color:#fff;
+  font-size:1.18rem;
 }
 
 .voice-row { margin-top:.75rem; }

@@ -90,7 +90,9 @@ function limparSinalAtual() {
 
 async function resetarBackend() {
   try {
-    await fetch('/reset', { method: 'POST' });
+    const res = await fetch('/reset', { method: 'POST' });
+    const data = await res.json();
+    atualizarFrase(data);
   } catch (e) {
     console.warn('Nao foi possivel resetar o backend:', e);
   }
@@ -190,6 +192,7 @@ function processarResposta(data) {
   // Waiting text
   document.getElementById('waitingText').textContent = data.waiting || '';
   atualizarTopPredictions(data.top_predictions || []);
+  atualizarFrase(data);
 
   // Sinal detectado
   if (data.label) {
@@ -199,8 +202,12 @@ function processarResposta(data) {
     void el.offsetWidth;
     el.classList.add('flash');
 
-    const fraseAtualizada = adicionarFrase(data.label);
-    if (fraseAtualizada) adicionarHistorico(data.label, data.confidence);
+    if (data.sinal_adicionado !== false) {
+      adicionarHistorico(data.label, data.confidence);
+      if (vozAutomatica) falarTexto(data.label);
+    } else {
+      atualizarEstadoVoz('Sinal repetido ignorado na frase');
+    }
     ultimoLabelFeedback = data.label;
     ultimaConfFeedback = data.confidence || 0;
     document.getElementById('feedbackStatus').textContent =
@@ -315,27 +322,29 @@ function adicionarHistorico(label, conf) {
   while (lista.children.length > 20) lista.removeChild(lista.lastChild);
 }
 
-function adicionarFrase(label) {
-  const ultimoLabel = frase.length > 0 ? frase[frase.length - 1] : null;
-  if (ultimoLabel === label) {
-    atualizarEstadoVoz('Sinal repetido ignorado na frase');
-    return false;
+function atualizarFrase(data) {
+  if (data?.sinais_detectados) {
+    frase = data.sinais_detectados;
   }
 
-  frase.push(label);
-  atualizarFrase();
-  if (vozAutomatica) falarTexto(label);
-  return true;
+  const sinaisEl = document.getElementById('sinaisDetectados');
+  const fraseEl = document.getElementById('fraseTexto');
+  const sinaisTexto = data?.sinais_texto || (frase.length > 0 ? frase.join(' | ') : '');
+  const fraseSugerida = data?.frase_sugerida || '';
+
+  sinaisEl.textContent = sinaisTexto || '—';
+  fraseEl.textContent = fraseSugerida || '—';
 }
 
-function atualizarFrase() {
-  const el = document.getElementById('fraseTexto');
-  el.textContent = frase.length > 0 ? frase.join(' ') : '—';
-}
-
-function removerUltima() {
-  frase.pop();
-  atualizarFrase();
+async function removerUltima() {
+  try {
+    const res = await fetch('/phrase/undo', { method: 'POST' });
+    const data = await res.json();
+    atualizarFrase(data);
+    atualizarEstadoVoz('Ultimo sinal removido');
+  } catch (e) {
+    console.warn('Nao foi possivel remover o ultimo sinal:', e);
+  }
 }
 
 function falarTexto(texto) {
@@ -349,8 +358,8 @@ function falarTexto(texto) {
 }
 
 function falarFrase() {
-  const texto = frase.join(' ').trim();
-  if (!texto) {
+  const texto = document.getElementById('fraseTexto').textContent.trim();
+  if (!texto || texto === '—') {
     const status = document.getElementById('voiceStatus');
     status.textContent = 'Nenhuma palavra na frase para falar.';
     status.style.color = 'var(--warn)';
@@ -382,10 +391,15 @@ function atualizarEstadoVoz(mensagemTemporaria) {
   status.style.color = vozAutomatica ? 'var(--green)' : 'var(--muted)';
 }
 
-function limparFrase() {
-  frase = [];
-  atualizarFrase();
-  pararVoz();
+async function limparFrase() {
+  try {
+    const res = await fetch('/phrase/clear', { method: 'POST' });
+    const data = await res.json();
+    atualizarFrase(data);
+    pararVoz();
+  } catch (e) {
+    console.warn('Nao foi possivel limpar a frase:', e);
+  }
 }
 
 function limparHistorico() {
@@ -435,3 +449,14 @@ function desenharLandmarks(visual) {
 }
 
 atualizarEstadoVoz();
+carregarFraseBackend();
+
+async function carregarFraseBackend() {
+  try {
+    const res = await fetch('/phrase');
+    const data = await res.json();
+    atualizarFrase(data);
+  } catch (e) {
+    console.warn('Nao foi possivel carregar a frase atual:', e);
+  }
+}
