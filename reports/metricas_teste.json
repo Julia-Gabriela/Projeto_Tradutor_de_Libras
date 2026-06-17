@@ -1,6 +1,6 @@
 {
-  "accuracy": 0.6703499079189686,
-  "balanced_accuracy": 0.6778801593873709,
+  "accuracy": 0.6646586345381527,
+  "balanced_accuracy": 0.6918996255305608,
   "classes": [
     "Aceitar",
     "Banheiro",
@@ -8,114 +8,143 @@
     "Calmo",
     "Casa",
     "Desconhecido",
+    "Eu",
     "Livro",
     "Nome",
     "Obrigado",
     "Oi",
+    "Quero",
     "Sortudo"
   ],
   "samples": {
-    "train_original": 1237,
-    "validation": 248,
-    "test": 543,
-    "train_after_augmentation": 8901
+    "train_original": 1398,
+    "validation": 280,
+    "test": 498,
+    "train_after_augmentation": 11781
   },
   "augmentation": {
     "n_augmentacoes": 8,
     "usar_espelhamento": false
   },
+  "ajustes_confusao": {
+    "label_smoothing": 0.01,
+    "multiplicadores_amostras_foco": {
+      "Oi": 2,
+      "Eu": 2
+    },
+    "multiplicadores_peso_classe": {
+      "Oi": 2.2,
+      "Eu": 1.7,
+      "Nome": 0.65,
+      "Bebida": 0.85
+    }
+  },
   "thresholds": {
-    "Aceitar": 0.95,
-    "Banheiro": 0.76,
-    "Bebida": 0.7,
+    "Aceitar": 0.75,
+    "Banheiro": 0.56,
+    "Bebida": 0.94,
     "Calmo": 0.55,
-    "Casa": 0.8899999999999999,
-    "Desconhecido": 0.8899999999999999,
-    "Livro": 0.75,
-    "Nome": 0.8799999999999999,
-    "Obrigado": 0.7,
+    "Casa": 0.84,
+    "Desconhecido": 0.94,
+    "Eu": 0.84,
+    "Livro": 0.55,
+    "Nome": 0.78,
+    "Obrigado": 0.55,
     "Oi": 0.75,
-    "Sortudo": 0.9299999999999999
+    "Quero": 0.95,
+    "Sortudo": 0.55
   },
   "classification_report": {
     "Aceitar": {
-      "precision": 0.5714285714285714,
-      "recall": 0.5714285714285714,
-      "f1-score": 0.5714285714285714,
-      "support": 49.0
-    },
-    "Banheiro": {
-      "precision": 0.9,
-      "recall": 0.75,
-      "f1-score": 0.8181818181818182,
-      "support": 84.0
-    },
-    "Bebida": {
-      "precision": 0.96875,
-      "recall": 0.6595744680851063,
-      "f1-score": 0.7848101265822784,
-      "support": 47.0
-    },
-    "Calmo": {
-      "precision": 0.7755102040816326,
-      "recall": 0.6440677966101694,
-      "f1-score": 0.7037037037037037,
-      "support": 59.0
-    },
-    "Casa": {
-      "precision": 0.65,
-      "recall": 0.7222222222222222,
-      "f1-score": 0.6842105263157895,
-      "support": 36.0
-    },
-    "Desconhecido": {
-      "precision": 0.4411764705882353,
-      "recall": 0.8108108108108109,
-      "f1-score": 0.5714285714285714,
-      "support": 37.0
-    },
-    "Livro": {
-      "precision": 0.2972972972972973,
-      "recall": 0.4583333333333333,
-      "f1-score": 0.36065573770491804,
+      "precision": 0.3488372093023256,
+      "recall": 0.625,
+      "f1-score": 0.44776119402985076,
       "support": 24.0
     },
+    "Banheiro": {
+      "precision": 0.7794117647058824,
+      "recall": 0.8548387096774194,
+      "f1-score": 0.8153846153846154,
+      "support": 62.0
+    },
+    "Bebida": {
+      "precision": 0.7843137254901961,
+      "recall": 0.7547169811320755,
+      "f1-score": 0.7692307692307693,
+      "support": 53.0
+    },
+    "Calmo": {
+      "precision": 0.7368421052631579,
+      "recall": 0.6666666666666666,
+      "f1-score": 0.7,
+      "support": 42.0
+    },
+    "Casa": {
+      "precision": 0.6923076923076923,
+      "recall": 0.782608695652174,
+      "f1-score": 0.7346938775510204,
+      "support": 23.0
+    },
+    "Desconhecido": {
+      "precision": 0.4791666666666667,
+      "recall": 0.5227272727272727,
+      "f1-score": 0.5,
+      "support": 44.0
+    },
+    "Eu": {
+      "precision": 0.6666666666666666,
+      "recall": 1.0,
+      "f1-score": 0.8,
+      "support": 14.0
+    },
+    "Livro": {
+      "precision": 0.6944444444444444,
+      "recall": 0.5434782608695652,
+      "f1-score": 0.6097560975609756,
+      "support": 46.0
+    },
     "Nome": {
-      "precision": 0.7,
-      "recall": 0.6176470588235294,
-      "f1-score": 0.65625,
-      "support": 34.0
+      "precision": 0.7586206896551724,
+      "recall": 0.8461538461538461,
+      "f1-score": 0.8,
+      "support": 26.0
     },
     "Obrigado": {
-      "precision": 0.9206349206349206,
-      "recall": 0.5858585858585859,
-      "f1-score": 0.7160493827160493,
-      "support": 99.0
+      "precision": 0.8085106382978723,
+      "recall": 0.6333333333333333,
+      "f1-score": 0.7102803738317757,
+      "support": 60.0
     },
     "Oi": {
-      "precision": 0.39473684210526316,
-      "recall": 0.8823529411764706,
-      "f1-score": 0.5454545454545454,
-      "support": 17.0
+      "precision": 0.5,
+      "recall": 0.2553191489361702,
+      "f1-score": 0.3380281690140845,
+      "support": 47.0
+    },
+    "Quero": {
+      "precision": 0.5833333333333334,
+      "recall": 0.7241379310344828,
+      "f1-score": 0.6461538461538462,
+      "support": 29.0
     },
     "Sortudo": {
-      "precision": 0.6417910447761194,
-      "recall": 0.7543859649122807,
-      "f1-score": 0.6935483870967742,
-      "support": 57.0
+      "precision": 0.7096774193548387,
+      "recall": 0.7857142857142857,
+      "f1-score": 0.7457627118644068,
+      "support": 28.0
     },
-    "accuracy": 0.6703499079189686,
+    "accuracy": 0.6646586345381527,
     "macro avg": {
-      "precision": 0.6601204864465491,
-      "recall": 0.6778801593873709,
-      "f1-score": 0.645974670055729,
-      "support": 543.0
+      "precision": 0.6570871042683268,
+      "recall": 0.6918996255305608,
+      "f1-score": 0.6628501272785651,
+      "support": 498.0
     },
     "weighted avg": {
-      "precision": 0.7366123197027654,
-      "recall": 0.6703499079189686,
-      "f1-score": 0.6842880574888291,
-      "support": 543.0
+      "precision": 0.6747353754593385,
+      "recall": 0.6646586345381527,
+      "f1-score": 0.6597189740873597,
+      "support": 498.0
     }
   }
 }

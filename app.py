@@ -15,7 +15,8 @@ import mediapipe as mp
 import tensorflow as tf
 from flask import Flask, render_template, request, jsonify
 from collections import deque
-from frase_builder import formatar_sinal, montar_frase
+from frase_builder import formatar_sinal
+from rag_libras import gerar_frase_com_rag
 
 inicio_app = time.perf_counter()
 
@@ -48,24 +49,58 @@ MIN_FRAMES_VALIDOS_PREDICAO = 8
 CONFIANCA_REJEICAO_PROXIMA = 0.35
 MARGEM_REJEICAO_PROXIMA = 0.18
 FEEDBACK_CSV = os.path.join(DATA_DIR, "feedback_landmarks.csv")
-DEBUG_PREDICOES = False
+DEBUG_PREDICOES = True
 
 THRESHOLDS_MANUAIS = {
     "Banheiro": 0.72,
     "Casa": 0.80,
     "Livro": 0.70,
-    "Nome": 0.82,
+    "Nome": 0.92,
     "Oi": 0.78,
 }
 MARGENS_MANUAIS = {
     "Banheiro": 0.40,
     "Casa": 0.40,
     "Livro": 0.42,
-    "Nome": 0.42,
+    "Nome": 0.60,
     "Oi": 0.40,
 }
 VOTOS_MANUAIS = {}
 LABELS_REJEICAO = {"Desconhecido", "Desconhecida", "Neutro", "Fundo", "Nada", "Outro"}
+CONFUSOES_SENSIVEIS = {
+    frozenset(("Eu", "Bebida")): 0.45,
+    frozenset(("Oi", "Aceitar")): 0.55,
+    frozenset(("Oi", "Banheiro")): 0.55,
+    frozenset(("Oi", "Bebida")): 0.55,
+    frozenset(("Oi", "Casa")): 0.55,
+    frozenset(("Oi", "Nome")): 0.62,
+    frozenset(("Nome", "Casa")): 0.55,
+    frozenset(("Nome", "Livro")): 0.55,
+    frozenset(("Nome", "Aceitar")): 0.55,
+    frozenset(("Nome", "Desconhecido")): 0.45,
+}
+CORRECOES_PRIORITARIAS = {
+    ("Nome", "Oi"): {
+        "label_corrigido": "Oi",
+        "min_conf_corrigido": 0.18,
+        "max_margem": 0.72,
+    },
+    ("Bebida", "Oi"): {
+        "label_corrigido": "Oi",
+        "min_conf_corrigido": 0.12,
+        "max_margem": 0.60,
+    },
+}
+PRIORIDADES_CONTRA_NOME = [
+    {"label": "Oi", "min_conf": 0.06},
+    {"label": "Eu", "min_conf": 0.06},
+]
+PRIORIDADES_CONTRA_BEBIDA = [
+    {"label": "Oi", "min_conf": 0.06},
+]
+PRIORIDADES_CONTRA_OI_ERRADO = [
+    {"label": "Oi", "min_conf": 0.08},
+]
 
 frame_buffer = deque(maxlen=MAX_FRAMES)
 historico_predicoes = deque(maxlen=JANELA_PREDICOES)
@@ -147,14 +182,54 @@ def deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, marg
     )
 
 
+def confusao_sensivel(label_voto, segundo_label, margem_voto):
+    """Evita aceitar pares que o modelo costuma confundir quando a margem e baixa."""
+    par = frozenset((label_voto, segundo_label))
+    margem_minima = CONFUSOES_SENSIVEIS.get(par)
+    return margem_minima is not None and margem_voto < margem_minima
+
+
+def corrigir_confusao_prioritaria(label_voto, conf_voto, segundo_label, segunda_conf, margem_voto, probs_media=None):
+    """Corrige confusoes recorrentes quando a segunda classe e o sinal desejado."""
+    prioridades_por_label = {
+        "Nome": PRIORIDADES_CONTRA_NOME,
+        "Bebida": PRIORIDADES_CONTRA_BEBIDA,
+        "Aceitar": PRIORIDADES_CONTRA_OI_ERRADO,
+        "Banheiro": PRIORIDADES_CONTRA_OI_ERRADO,
+        "Casa": PRIORIDADES_CONTRA_OI_ERRADO,
+    }
+    if label_voto in prioridades_por_label and probs_media is not None:
+        for prioridade in prioridades_por_label[label_voto]:
+            label_prioritario = prioridade["label"]
+            if label_prioritario not in labels:
+                continue
+            conf_prioritaria = float(probs_media[labels.index(label_prioritario)])
+            if conf_prioritaria >= prioridade["min_conf"]:
+                return label_prioritario, conf_prioritaria, label_voto, conf_voto, margem_voto, True
+
+    regra = CORRECOES_PRIORITARIAS.get((label_voto, segundo_label))
+    if not regra:
+        return label_voto, conf_voto, segundo_label, segunda_conf, margem_voto, False
+
+    if segunda_conf < regra["min_conf_corrigido"] or margem_voto > regra["max_margem"]:
+        return label_voto, conf_voto, segundo_label, segunda_conf, margem_voto, False
+
+    label_corrigido = regra["label_corrigido"]
+    return label_corrigido, segunda_conf, label_voto, conf_voto, margem_voto, True
+
+
 def estado_frase():
     with frase_lock:
         sinais = list(frase_detectada)
 
+    resultado_rag = gerar_frase_com_rag(sinais)
     return {
         "sinais_detectados": sinais,
         "sinais_texto": " | ".join(sinais),
-        "frase_sugerida": montar_frase(sinais),
+        "frase_sugerida": resultado_rag.get("frase", ""),
+        "frase_origem": resultado_rag.get("fonte", ""),
+        "frase_explicacao": resultado_rag.get("explicacao", ""),
+        "frase_exemplo_recuperado": resultado_rag.get("exemplo_recuperado"),
     }
 
 
@@ -418,7 +493,7 @@ def votar_predicao(historico_pred):
     top_indices = [int(np.argmax(p[0])) for p in historico_pred]
     votos_vencedor = sum(1 for idx in top_indices if idx == idx_vencedor)
 
-    return labels[idx_vencedor], conf_media, votos_vencedor, margem_media, labels[idx_segundo], segunda_conf
+    return labels[idx_vencedor], conf_media, votos_vencedor, margem_media, labels[idx_segundo], segunda_conf, probs_media
 
 
 def gerar_colunas_feedback():
@@ -649,13 +724,32 @@ def predict():
     conf_voto = conf  # fallback seguro
     
     if resultado_voto:
-        label_voto, conf_voto, votos, margem_voto, segundo_label, segunda_conf = resultado_voto
+        label_voto, conf_voto, votos, margem_voto, segundo_label, segunda_conf, probs_media = resultado_voto
+        label_voto, conf_voto, segundo_label, segunda_conf, margem_voto, corrigido_por_confusao = (
+            corrigir_confusao_prioritaria(
+                label_voto,
+                conf_voto,
+                segundo_label,
+                segunda_conf,
+                margem_voto,
+                probs_media,
+            )
+        )
         threshold = get_threshold(label_voto)
 
         margem_ajustada = get_margem_minima(label_voto)
         votos_necessarios = get_votos_necessarios(label_voto)
+        if corrigido_por_confusao:
+            threshold = min(threshold, conf_voto)
+            margem_ajustada = 0.0
+            votos_necessarios = 1
+
         rejeitar_por_desconhecido = deve_rejeitar_por_desconhecido(
             label_voto, segundo_label, segunda_conf, margem_voto
+        )
+        rejeitar_por_confusao = (
+            False if corrigido_por_confusao
+            else confusao_sensivel(label_voto, segundo_label, margem_voto)
         )
         repeticao_do_mesmo_sinal = label_voto == ultimo_label_emitido
 
@@ -666,6 +760,7 @@ def predict():
             movimento_seq > MOVIMENTO_MINIMO * 2 and
             debounce_counter == 0 and
             not rejeitar_por_desconhecido and
+            not rejeitar_por_confusao and
             not repeticao_do_mesmo_sinal
         )
 
@@ -686,6 +781,10 @@ def predict():
     if resultado_voto and not label_final:
         if deve_rejeitar_por_desconhecido(label_voto, segundo_label, segunda_conf, margem_voto):
             waiting_msg = "Gesto fora do vocabulario."
+        elif 'corrigido_por_confusao' in locals() and corrigido_por_confusao:
+            waiting_msg = f"Reconhecendo {label_voto} por correcao de confusao com {segundo_label}..."
+        elif confusao_sensivel(label_voto, segundo_label, margem_voto):
+            waiting_msg = f"Duvida entre {label_voto} e {segundo_label}. Refaca o sinal mais devagar."
         elif label_voto == ultimo_label_emitido:
             waiting_msg = f"{label_voto} ja foi registrado. Troque de sinal ou abaixe as maos."
         elif votos < votos_necessarios:

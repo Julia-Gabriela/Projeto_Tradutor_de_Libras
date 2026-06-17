@@ -555,6 +555,21 @@ select.btn-mini option:checked {
   font-size:1.18rem;
 }
 
+.frase-meta {
+  margin-top:.65rem;
+  color:var(--accent3);
+  font-size:.76rem;
+  font-weight:800;
+}
+
+.frase-explicacao {
+  margin-top:.35rem;
+  color:var(--muted);
+  font-size:.78rem;
+  font-weight:600;
+  line-height:1.35;
+}
+
 .voice-row { margin-top:.75rem; }
 
 .voice-status {

@@ -10,6 +10,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.preprocessing import LabelEncoder
@@ -45,7 +46,68 @@ ENCODER_SAIDA = os.path.join(MODELS_DIR, "label_encoder.pkl")
 N_AUGMENTACOES = 8
 USAR_ESPELHAMENTO = False
 
-METADATA_COLS = ["source_video"]
+METADATA_COLS = ["source_video", "quality_score"]
+
+# Ajustes sem refazer o preprocessamento: reforcam classes que ficaram
+# confundidas depois da entrada de EU/QUERO e reduzem a dominancia de NOME.
+LABEL_SMOOTHING = 0.01
+MULTIPLICADORES_AMOSTRAS_FOCO = {
+    "Oi": 2,
+    "Eu": 2,
+}
+MULTIPLICADORES_PESO_CLASSE = {
+    "Oi": 2.2,
+    "Eu": 1.7,
+    "Nome": 0.65,
+    "Bebida": 0.85,
+}
+
+FRONT_COLORS = {
+    "bg": "#0b0714",
+    "surface": "#151024",
+    "surface_soft": "#1d1530",
+    "surface_glow": "#241536",
+    "accent": "#ff4fbd",
+    "accent2": "#9d57ff",
+    "accent3": "#7ee8ff",
+    "green": "#73f7bd",
+    "text": "#fff7fd",
+    "muted": "#b8a9c8",
+    "danger": "#ff6d92",
+    "warn": "#ffd166",
+    "grid": "#ffa4dc",
+}
+
+FRONT_CMAP = LinearSegmentedColormap.from_list(
+    "front_libras",
+    [
+        FRONT_COLORS["bg"],
+        FRONT_COLORS["surface_soft"],
+        FRONT_COLORS["accent2"],
+        FRONT_COLORS["accent"],
+        FRONT_COLORS["accent3"],
+    ],
+)
+
+
+def aplicar_tema_front(ax, titulo, xlabel=None, ylabel=None):
+    ax.set_facecolor(FRONT_COLORS["surface"])
+    ax.set_title(titulo, color=FRONT_COLORS["text"], fontweight="bold", pad=14)
+    if xlabel:
+        ax.set_xlabel(xlabel, color=FRONT_COLORS["muted"], labelpad=8)
+    if ylabel:
+        ax.set_ylabel(ylabel, color=FRONT_COLORS["muted"], labelpad=8)
+    ax.tick_params(colors=FRONT_COLORS["muted"])
+    for spine in ax.spines.values():
+        spine.set_color(FRONT_COLORS["surface_glow"])
+    ax.grid(True, color=FRONT_COLORS["grid"], alpha=0.16, linewidth=0.8)
+
+
+def salvar_figura_front(fig, caminho):
+    fig.patch.set_facecolor(FRONT_COLORS["bg"])
+    fig.tight_layout()
+    fig.savefig(caminho, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
 
 
 def mascara_coordenadas(seq):
@@ -176,6 +238,34 @@ def aplicar_augmentation(X, y, n_aug=N_AUGMENTACOES):
     return X_final[idx], y_final[idx]
 
 
+def reforcar_amostras_foco(X, y, label_encoder):
+    X_partes = [X]
+    y_partes = [y]
+    adicionadas = {}
+
+    for label, multiplicador in MULTIPLICADORES_AMOSTRAS_FOCO.items():
+        if label not in label_encoder.classes_ or multiplicador <= 1:
+            continue
+
+        cls_idx = int(np.where(label_encoder.classes_ == label)[0][0])
+        indices = np.where(y == cls_idx)[0]
+        if len(indices) == 0:
+            continue
+
+        for _ in range(multiplicador - 1):
+            X_partes.append(X[indices])
+            y_partes.append(y[indices])
+        adicionadas[label] = len(indices) * (multiplicador - 1)
+
+    if adicionadas:
+        print(f"  Reforco de classes foco: {adicionadas}")
+
+    X_final = np.concatenate(X_partes, axis=0)
+    y_final = np.concatenate(y_partes, axis=0)
+    idx = np.random.permutation(len(X_final))
+    return X_final[idx], y_final[idx]
+
+
 def grupo_video(nome_video):
     nome = os.path.splitext(str(nome_video))[0]
     anterior = None
@@ -281,6 +371,8 @@ resumo_qualidade = auditar_qualidade_preprocessamento()
 if os.path.exists(FEEDBACK_CSV):
     print(f"Carregando feedback coletado em {FEEDBACK_CSV}...")
     df_feedback = pd.read_csv(FEEDBACK_CSV)
+    if "quality_score" in df.columns and "quality_score" not in df_feedback.columns:
+        df_feedback["quality_score"] = 0.0
     colunas_faltando = [c for c in df.columns if c not in df_feedback.columns]
     if colunas_faltando:
         print(f"  [AVISO] Feedback ignorado: {len(colunas_faltando)} colunas faltando.")
@@ -354,6 +446,9 @@ X_train_base, X_val, y_train_base, y_val_int = train_test_split(
 )
 print(f"  Validacao real : {X_val.shape[0]} amostras (sem augmentation)")
 
+X_train_base, y_train_base = reforcar_amostras_foco(X_train_base, y_train_base, le)
+print(f"  Treino base apos reforco: {X_train_base.shape[0]} amostras")
+
 print(f"\n  Aplicando Data Augmentation ({N_AUGMENTACOES}x)...")
 print(f"  Espelhamento automatico: {'SIM' if USAR_ESPELHAMENTO else 'NAO'}")
 X_train, y_train_int = aplicar_augmentation(X_train_base, y_train_base, N_AUGMENTACOES)
@@ -367,8 +462,8 @@ print("\n  Construindo modelo com atencao temporal...")
 model = construir_modelo(MAX_FRAMES, N_FEATURES, n_classes)
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
-    loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.04),
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.0008),
+    loss=tf.keras.losses.CategoricalCrossentropy(label_smoothing=LABEL_SMOOTHING),
     metrics=["accuracy"]
 )
 
@@ -384,6 +479,8 @@ print("\n  Calculando pesos das classes...")
 from sklearn.utils.class_weight import compute_class_weight
 pesos = compute_class_weight('balanced', classes=np.unique(y_train_int), y=y_train_int)
 class_weight = dict(enumerate(pesos))
+for idx_classe, nome_classe in enumerate(le.classes_):
+    class_weight[idx_classe] = class_weight.get(idx_classe, 1.0) * MULTIPLICADORES_PESO_CLASSE.get(nome_classe, 1.0)
 print(f"  Pesos: { {le.classes_[i]: round(v,2) for i,v in class_weight.items()} }")
 
 print("\n  Iniciando treinamento...\n")
@@ -483,6 +580,11 @@ metricas = {
         "n_augmentacoes": int(N_AUGMENTACOES),
         "usar_espelhamento": bool(USAR_ESPELHAMENTO),
     },
+    "ajustes_confusao": {
+        "label_smoothing": float(LABEL_SMOOTHING),
+        "multiplicadores_amostras_foco": MULTIPLICADORES_AMOSTRAS_FOCO,
+        "multiplicadores_peso_classe": MULTIPLICADORES_PESO_CLASSE,
+    },
     "thresholds": thresholds,
     "classification_report": relatorio_dict,
 }
@@ -505,46 +607,75 @@ print(f"  Thresholds    : {thresholds_saida}")
 print(f"  Metricas      : {metricas_saida}")
 print(f"  Relatorio     : {relatorio_saida}")
 
-plt.figure(figsize=(8, 5))
-plt.plot(historico.history["accuracy"], label="Treino")
-plt.plot(historico.history["val_accuracy"], label="Validacao")
-plt.title(f"Acuracia - melhor teste: {acuracia:.2%}")
-plt.xlabel("Epoca")
-plt.ylabel("Acuracia")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, "resultado_treinamento.png"), dpi=150, bbox_inches="tight")
-plt.close()
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(
+    historico.history["accuracy"],
+    label="Treino",
+    color=FRONT_COLORS["accent"],
+    linewidth=2.6,
+    marker="o",
+    markersize=3.5,
+)
+ax.plot(
+    historico.history["val_accuracy"],
+    label="Validacao",
+    color=FRONT_COLORS["accent3"],
+    linewidth=2.6,
+    marker="o",
+    markersize=3.5,
+)
+aplicar_tema_front(ax, f"Acuracia - melhor teste: {acuracia:.2%}", "Epoca", "Acuracia")
+legenda = ax.legend(facecolor=FRONT_COLORS["surface_soft"], edgecolor=FRONT_COLORS["surface_glow"])
+for texto in legenda.get_texts():
+    texto.set_color(FRONT_COLORS["text"])
+salvar_figura_front(fig, os.path.join(REPORTS_DIR, "resultado_treinamento.png"))
 
-plt.figure(figsize=(8, 5))
-plt.plot(historico.history["loss"], label="Treino")
-plt.plot(historico.history["val_loss"], label="Validacao")
-plt.title("Perda / Loss")
-plt.xlabel("Epoca")
-plt.ylabel("Loss")
-plt.legend()
-plt.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, "resultado_loss.png"), dpi=150, bbox_inches="tight")
-plt.close()
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(
+    historico.history["loss"],
+    label="Treino",
+    color=FRONT_COLORS["accent"],
+    linewidth=2.6,
+    marker="o",
+    markersize=3.5,
+)
+ax.plot(
+    historico.history["val_loss"],
+    label="Validacao",
+    color=FRONT_COLORS["warn"],
+    linewidth=2.6,
+    marker="o",
+    markersize=3.5,
+)
+aplicar_tema_front(ax, "Perda / Loss", "Epoca", "Loss")
+legenda = ax.legend(facecolor=FRONT_COLORS["surface_soft"], edgecolor=FRONT_COLORS["surface_glow"])
+for texto in legenda.get_texts():
+    texto.set_color(FRONT_COLORS["text"])
+salvar_figura_front(fig, os.path.join(REPORTS_DIR, "resultado_loss.png"))
 
-plt.figure(figsize=(max(6, n_classes), max(5, n_classes - 1)))
-plt.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
-plt.title("Matriz de Confusao")
-plt.colorbar()
+fig, ax = plt.subplots(figsize=(max(6, n_classes), max(5, n_classes - 1)))
+imagem = ax.imshow(cm, interpolation="nearest", cmap=FRONT_CMAP)
+aplicar_tema_front(ax, "Matriz de Confusao", "Previsto", "Real")
+colorbar = fig.colorbar(imagem, ax=ax)
+colorbar.ax.tick_params(colors=FRONT_COLORS["muted"])
+colorbar.outline.set_edgecolor(FRONT_COLORS["surface_glow"])
 tick_marks = np.arange(n_classes)
-plt.xticks(tick_marks, le.classes_, rotation=45, ha="right")
-plt.yticks(tick_marks, le.classes_)
+ax.set_xticks(tick_marks)
+ax.set_yticks(tick_marks)
+ax.set_xticklabels(le.classes_, rotation=45, ha="right")
+ax.set_yticklabels(le.classes_)
 for i in range(n_classes):
     for j in range(n_classes):
-        plt.text(j, i, str(cm[i, j]), ha="center", va="center",
-                 color="white" if cm[i, j] > cm.max() / 2 else "black")
-plt.ylabel("Real")
-plt.xlabel("Previsto")
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, "matriz_confusao.png"), dpi=150, bbox_inches="tight")
-plt.close()
+        ax.text(
+            j,
+            i,
+            str(cm[i, j]),
+            ha="center",
+            va="center",
+            color=FRONT_COLORS["text"] if cm[i, j] > cm.max() / 2 else FRONT_COLORS["accent3"],
+            fontweight="bold",
+        )
+salvar_figura_front(fig, os.path.join(REPORTS_DIR, "matriz_confusao.png"))
 
 print(f"  Graficos salvos em: {REPORTS_DIR}")
 print("\n  Proximo passo:")

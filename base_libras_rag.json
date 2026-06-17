@@ -1,0 +1,82 @@
+[
+  {
+    "id": "ex_001",
+    "tipo": "frase_fixa",
+    "padrao_sinais": ["OI"],
+    "traducao_pt": "Oi.",
+    "explicacao": "Cumprimento simples traduzido diretamente para o portugues.",
+    "tags": ["cumprimento"]
+  },
+  {
+    "id": "ex_002",
+    "tipo": "frase_fixa",
+    "padrao_sinais": ["OBRIGADO"],
+    "traducao_pt": "Obrigado.",
+    "explicacao": "Expressao de agradecimento traduzida diretamente para o portugues.",
+    "tags": ["agradecimento"]
+  },
+  {
+    "id": "ex_003",
+    "tipo": "sujeito_verbo_objeto",
+    "padrao_sinais": ["EU", "QUERO", "BEBIDA"],
+    "traducao_pt": "Eu quero uma bebida.",
+    "explicacao": "Sequencia formada por sujeito, verbo de desejo e objeto.",
+    "tags": ["sujeito", "verbo", "objeto", "desejo"]
+  },
+  {
+    "id": "ex_004",
+    "tipo": "sujeito_verbo_local",
+    "padrao_sinais": ["EU", "QUERO", "BANHEIRO"],
+    "traducao_pt": "Eu quero ir ao banheiro.",
+    "explicacao": "A combinacao QUERO + BANHEIRO pode ser interpretada como desejo de ir ao banheiro.",
+    "tags": ["sujeito", "verbo", "local", "desejo"]
+  },
+  {
+    "id": "ex_005",
+    "tipo": "sujeito_local",
+    "padrao_sinais": ["EU", "CASA"],
+    "traducao_pt": "Eu estou em casa.",
+    "explicacao": "Quando o sujeito EU aparece seguido de CASA, a frase pode ser interpretada com o verbo estar.",
+    "tags": ["sujeito", "local", "estar"]
+  },
+  {
+    "id": "ex_006",
+    "tipo": "sujeito_estado",
+    "padrao_sinais": ["EU", "CALMO"],
+    "traducao_pt": "Eu estou calmo.",
+    "explicacao": "Quando o sujeito EU aparece seguido de um estado, a frase pode usar o verbo estar.",
+    "tags": ["sujeito", "estado"]
+  },
+  {
+    "id": "ex_007",
+    "tipo": "sujeito_caracteristica",
+    "padrao_sinais": ["EU", "SORTUDO"],
+    "traducao_pt": "Eu sou sortudo.",
+    "explicacao": "Quando o sinal indica uma caracteristica, pode ser usado o verbo ser.",
+    "tags": ["sujeito", "caracteristica"]
+  },
+  {
+    "id": "ex_008",
+    "tipo": "sujeito_verbo_objeto",
+    "padrao_sinais": ["EU", "QUERO", "LIVRO"],
+    "traducao_pt": "Eu quero um livro.",
+    "explicacao": "Sequencia com sujeito, verbo de desejo e objeto.",
+    "tags": ["sujeito", "verbo", "objeto", "desejo"]
+  },
+  {
+    "id": "ex_009",
+    "tipo": "frase_fixa",
+    "padrao_sinais": ["EU", "NOME"],
+    "traducao_pt": "Meu nome.",
+    "explicacao": "Sequencia curta usada para indicar apresentacao do proprio nome.",
+    "tags": ["sujeito", "identificacao"]
+  },
+  {
+    "id": "ex_010",
+    "tipo": "sujeito_verbo",
+    "padrao_sinais": ["EU", "ACEITAR"],
+    "traducao_pt": "Eu aceito.",
+    "explicacao": "Sequencia formada por sujeito e verbo.",
+    "tags": ["sujeito", "verbo"]
+  }
+]

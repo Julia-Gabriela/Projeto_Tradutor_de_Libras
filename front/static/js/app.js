@@ -329,11 +329,29 @@ function atualizarFrase(data) {
 
   const sinaisEl = document.getElementById('sinaisDetectados');
   const fraseEl = document.getElementById('fraseTexto');
+  const origemEl = document.getElementById('fraseOrigem');
+  const explicacaoEl = document.getElementById('fraseExplicacao');
   const sinaisTexto = data?.sinais_texto || (frase.length > 0 ? frase.join(' | ') : '');
   const fraseSugerida = data?.frase_sugerida || '';
+  const origem = formatarOrigemFrase(data?.frase_origem || '');
+  const explicacao = data?.frase_explicacao || '';
 
   sinaisEl.textContent = sinaisTexto || '—';
   fraseEl.textContent = fraseSugerida || '—';
+  if (origemEl) origemEl.textContent = origem ? `Origem: ${origem}` : 'Origem: —';
+  if (explicacaoEl) explicacaoEl.textContent = explicacao || '—';
+}
+
+function formatarOrigemFrase(origem) {
+  const nomes = {
+    rag_exato: 'RAG exato',
+    rag_aproximado: 'RAG aproximado',
+    fallback_regras: 'Fallback por regras',
+    fallback_sinais: 'Sequência de sinais',
+    sinal_desconhecido: 'Sinal desconhecido',
+    sem_sinais: ''
+  };
+  return nomes[origem] || origem;
 }
 
 async function removerUltima() {
